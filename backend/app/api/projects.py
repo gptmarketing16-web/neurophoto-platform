@@ -226,9 +226,12 @@ def delete_project(project_id: str, user: CurrentUser, db: Session = Depends(get
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Проект не найден")
-    storage.delete_prefix(f"projects/{project_id}")
+    storage_keys = list(
+        db.scalars(select(ProjectAsset.storage_key).where(ProjectAsset.project_id == project_id)).all()
+    )
     db.delete(project)
     db.commit()
+    storage.delete_keys(storage_keys)
 
 
 @router.post("/api/projects/{project_id}/nodes", status_code=201)
@@ -338,16 +341,23 @@ def delete_node(node_id: str, user: CurrentUser, db: Session = Depends(get_db)) 
         raise HTTPException(404, "Блок не найден")
     assert_project_access(user, node.project_id, write=True)
     project_id = node.project_id
-    storage.delete_prefix(f"projects/{project_id}/nodes/{node.id}")
-    for generation in db.scalars(
-        select(CanvasGeneration).where(CanvasGeneration.prompt_node_id == node.id)
-    ).all():
-        storage.delete_prefix(f"projects/{project_id}/generations/{generation.id}")
+    generation_ids = list(
+        db.scalars(
+            select(CanvasGeneration.id).where(CanvasGeneration.prompt_node_id == node.id)
+        ).all()
+    )
+    asset_filter = ProjectAsset.node_id == node.id
+    if generation_ids:
+        asset_filter = asset_filter | ProjectAsset.generation_id.in_(generation_ids)
+    storage_keys = list(
+        db.scalars(select(ProjectAsset.storage_key).where(asset_filter)).all()
+    )
     project = db.get(Project, project_id)
     db.delete(node)
     if project:
         project.updated_at = utcnow()
     db.commit()
+    storage.delete_keys(storage_keys)
 
 
 async def _replace_node_asset(

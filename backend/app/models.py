@@ -127,7 +127,9 @@ class Project(Base):
     nodes: Mapped[list[ProjectNode]] = relationship(
         back_populates="project", cascade="all, delete-orphan", order_by="ProjectNode.created_at"
     )
-    generations: Mapped[list[CanvasGeneration]] = relationship(back_populates="project")
+    generations: Mapped[list[CanvasGeneration]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class ProjectNode(Base):
@@ -177,7 +179,8 @@ class CanvasGeneration(Base):
     project: Mapped[Project] = relationship(back_populates="generations")
     prompt_node: Mapped[ProjectNode] = relationship(back_populates="generations")
     assets: Mapped[list[ProjectAsset]] = relationship(
-        back_populates="generation", order_by="ProjectAsset.order_index"
+        back_populates="generation", cascade="all, delete-orphan",
+        passive_deletes=True, order_by="ProjectAsset.order_index"
     )
 
 

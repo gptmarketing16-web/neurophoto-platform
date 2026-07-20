@@ -39,7 +39,7 @@ services:
       - key: OUTPUT_ASSET_TTL_MINUTES
         value: 60
       - key: CLEANUP_INTERVAL_SECONDS
-        value: 60
+        value: 180
       - key: MAX_UPLOAD_MB
         value: 50
       - key: APP_SECRET_KEY

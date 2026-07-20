@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
 import re
 import shutil
@@ -10,6 +11,8 @@ from fastapi import UploadFile
 
 from ..settings import settings
 
+
+logger = logging.getLogger(__name__)
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -69,6 +72,10 @@ class LocalStorage:
         if path.exists():
             shutil.rmtree(path)
 
+    def delete_keys(self, storage_keys: list[str] | tuple[str, ...] | set[str]) -> None:
+        for storage_key in dict.fromkeys(str(key) for key in storage_keys if key):
+            self.delete_key(storage_key)
+
 
 class S3Storage(LocalStorage):
     """Private S3 storage with a local disposable cache.
@@ -100,7 +107,10 @@ class S3Storage(LocalStorage):
             region_name=settings.s3_region,
             config=Config(
                 signature_version="s3v4",
-                retries={"max_attempts": 5, "mode": "standard"},
+                connect_timeout=5,
+                read_timeout=20,
+                max_pool_connections=4,
+                retries={"max_attempts": 2, "mode": "standard"},
                 s3={"addressing_style": "path"},
             ),
         )
@@ -158,23 +168,39 @@ class S3Storage(LocalStorage):
         )
 
     def delete_key(self, storage_key: str) -> None:
-        self.client.delete_object(Bucket=self.bucket, Key=storage_key)
-        super().delete_key(storage_key)
+        # Storage cleanup must never turn a user action into HTTP 500.
+        # Database records are the source of truth; an orphaned S3 object can be
+        # retried by maintenance, while a failed UI delete is much worse.
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=storage_key)
+        except Exception:
+            logger.warning("Could not delete S3 object %s", storage_key, exc_info=True)
+        finally:
+            super().delete_key(storage_key)
+
+    def delete_keys(self, storage_keys: list[str] | tuple[str, ...] | set[str]) -> None:
+        for storage_key in dict.fromkeys(str(key) for key in storage_keys if key):
+            self.delete_key(storage_key)
 
     def delete_prefix(self, prefix: str) -> None:
-        continuation: str | None = None
-        while True:
-            kwargs = {"Bucket": self.bucket, "Prefix": prefix}
-            if continuation:
-                kwargs["ContinuationToken"] = continuation
-            response = self.client.list_objects_v2(**kwargs)
-            objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
-            if objects:
-                self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": objects, "Quiet": True})
-            if not response.get("IsTruncated"):
-                break
-            continuation = response.get("NextContinuationToken")
-        super().delete_prefix(prefix)
+        # Kept for maintenance operations. Interactive deletes use known DB keys
+        # and avoid a potentially slow remote prefix listing.
+        try:
+            continuation: str | None = None
+            while True:
+                kwargs = {"Bucket": self.bucket, "Prefix": prefix, "MaxKeys": 500}
+                if continuation:
+                    kwargs["ContinuationToken"] = continuation
+                response = self.client.list_objects_v2(**kwargs)
+                for item in response.get("Contents", []):
+                    self.delete_key(str(item["Key"]))
+                if not response.get("IsTruncated"):
+                    break
+                continuation = response.get("NextContinuationToken")
+        except Exception:
+            logger.warning("Could not delete S3 prefix %s", prefix, exc_info=True)
+        finally:
+            super().delete_prefix(prefix)
 
 
 storage = S3Storage() if settings.storage_backend == "s3" else LocalStorage()
