@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 import re
 import shutil
 from pathlib import Path
@@ -119,14 +120,29 @@ class S3Storage(LocalStorage):
                 raise
         return path
 
+    @staticmethod
+    def _content_type(storage_key: str, fallback: str = "application/octet-stream") -> str:
+        return mimetypes.guess_type(storage_key)[0] or fallback
+
     async def save_upload(self, storage_key: str, upload: UploadFile) -> tuple[str, int]:
         digest, total = await super().save_upload(storage_key, upload)
-        self.client.upload_file(str(super().absolute(storage_key)), self.bucket, storage_key)
+        content_type = upload.content_type or self._content_type(storage_key)
+        self.client.upload_file(
+            str(super().absolute(storage_key)),
+            self.bucket,
+            storage_key,
+            ExtraArgs={"ContentType": content_type},
+        )
         return digest, total
 
     def save_bytes(self, storage_key: str, data: bytes) -> str:
         digest = super().save_bytes(storage_key, data)
-        self.client.upload_file(str(super().absolute(storage_key)), self.bucket, storage_key)
+        self.client.upload_file(
+            str(super().absolute(storage_key)),
+            self.bucket,
+            storage_key,
+            ExtraArgs={"ContentType": self._content_type(storage_key)},
+        )
         return digest
 
     def persist_file(self, storage_key: str, path: Path) -> None:
@@ -134,7 +150,12 @@ class S3Storage(LocalStorage):
         target.parent.mkdir(parents=True, exist_ok=True)
         if path.resolve() != target.resolve():
             shutil.copy2(path, target)
-        self.client.upload_file(str(target), self.bucket, storage_key)
+        self.client.upload_file(
+            str(target),
+            self.bucket,
+            storage_key,
+            ExtraArgs={"ContentType": self._content_type(storage_key)},
+        )
 
     def delete_key(self, storage_key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=storage_key)
