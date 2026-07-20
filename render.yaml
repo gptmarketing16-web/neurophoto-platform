@@ -1,0 +1,66 @@
+services:
+  - type: web
+    name: neurophoto-platform
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_NAME
+        value: NeuroPhoto Platform
+      - key: APP_ENV
+        value: production
+      - key: SESSION_COOKIE_NAME
+        value: neurophoto_session
+      - key: SESSION_TTL_HOURS
+        value: 24
+      - key: SECURE_COOKIES
+        value: true
+      - key: QUEUE_MODE
+        value: redis
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: STORAGE_ROOT
+        value: /tmp/neurophoto-cache
+      - key: IMAGE_PROVIDER
+        value: production
+      - key: ALLOW_MOCK_FALLBACK
+        value: false
+      - key: OPENAI_API_BASE_URL
+        value: https://api.openai.com/v1
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-2
+      - key: GEMINI_API_BASE_URL
+        value: https://generativelanguage.googleapis.com
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-3.1-flash-image
+      - key: CUSTOMER_ASSET_TTL_MINUTES
+        value: 30
+      - key: OUTPUT_ASSET_TTL_MINUTES
+        value: 60
+      - key: CLEANUP_INTERVAL_SECONDS
+        value: 60
+      - key: MAX_UPLOAD_MB
+        value: 50
+      - key: APP_SECRET_KEY
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+      - key: OWNER_PASSWORD
+        sync: false
+      - key: OWNER_NAME
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_REGION
+        sync: false

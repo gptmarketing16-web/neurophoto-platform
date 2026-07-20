@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="AI-платформа для создания и автоматизации нейрофотосессий" />
+  <title>URA AI — нейрофотосессии как визуальный workflow</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="/static/theme.js"></script>
+</head>
+<body>
+<header class="site-header" id="header">
+  <div class="shell nav">
+    <a class="brand" href="/"><span class="brand-mark">URA</span><span>AI Platform</span></a>
+    <nav class="nav-links" aria-label="Основная навигация">
+      <a href="#possibilities">Возможности</a>
+      <a href="#workflow">Как работает</a>
+      <a href="#start">Запуск</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="icon-button" type="button" data-theme-toggle><span data-theme-icon>◐</span></button>
+      <a class="button ghost" href="/app">Войти</a>
+      <a class="button primary" href="/app#workspace">Создать пространство</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="hero" id="workflow">
+    <div class="shell hero-grid">
+      <div>
+        <span class="eyebrow"><span class="eyebrow-dot"></span> Визуальная AI-платформа</span>
+        <h1>Нейрофотосессии, собранные как <em>workflow</em></h1>
+        <p class="hero-copy">Загружайте собственные промпты и референсы, запускайте несколько генераций одновременно и принимайте заказы из MAX — в одном понятном пространстве.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="/app">Открыть студию</a>
+          <a class="button" href="#possibilities">Посмотреть возможности</a>
+        </div>
+        <div class="hero-note"><span>Автоматические ID шаблонов</span><span>Временное хранение файлов</span></div>
+      </div>
+
+      <div class="workflow-card" aria-label="Пример визуального workflow">
+        <span class="flow-badge">● workflow online</span>
+        <div class="flow-node node-a"><div class="node-icon">↥</div><strong>Фото клиента</strong><small>2 identity-референса загружены</small></div>
+        <div class="flow-node node-b"><div class="node-icon">✦</div><strong>Шаблон №30</strong><small>Промпт и сцена готовы</small></div>
+        <div class="flow-node node-c"><div class="node-icon">AI</div><strong>Генерация × 3</strong><small>Параллельный пакет</small></div>
+        <div class="flow-node node-d"><div class="node-icon">→</div><strong>Доставка в MAX</strong><small>Затем файлы удаляются</small></div>
+        <span class="flow-line line-1"></span><span class="flow-line line-2"></span><span class="flow-line line-3"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="possibilities">
+    <div class="shell">
+      <div class="section-head">
+        <h2>Всё важное — без лишней сложности</h2>
+        <p>Сервис строится вокруг ваших готовых сценариев и позволяет масштабировать производство фотосессий без ручной сборки каждого заказа.</p>
+      </div>
+      <div class="cards">
+        <article class="feature-card"><span>01</span><h3>Свои шаблоны</h3><p>Загружайте промпт и несколько референсов. Внутренний ID создаётся автоматически.</p></article>
+        <article class="feature-card"><span>02</span><h3>Пакетная генерация</h3><p>Один заказ может запускать сразу несколько изображений по одному или нескольким шаблонам.</p></article>
+        <article class="feature-card"><span>03</span><h3>Собственная ссылка</h3><p>Создайте публичный адрес пространства, например <strong>ura_smm_ai_platform</strong>.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="start">
+    <div class="shell">
+      <div class="cta-panel">
+        <h2>Создайте первое AI-пространство за несколько минут</h2>
+        <p>Назовите проект, выберите уникальный адрес и добавьте первый шаблон. Остальную инфраструктуру можно подключать последовательно.</p>
+        <a class="button primary" href="/app#workspace">Начать настройку</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer"><div class="shell footer-row"><span>URA AI Platform · MVP</span><span>Нейрофотосессии и автоматизация</span></div></footer>
+<script>
+  const header = document.getElementById('header');
+  addEventListener('scroll', () => header.classList.toggle('scrolled', scrollY > 12));
+</script>
+</body>
+</html>

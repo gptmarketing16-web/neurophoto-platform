@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход · NeuroPhoto</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    body{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 20%,rgba(124,92,255,.2),transparent 36%),var(--bg,#0e1015);font-family:Inter,Arial,sans-serif}
+    .login-card{width:min(420px,calc(100vw - 32px));padding:32px;border-radius:24px;background:rgba(24,27,36,.94);box-shadow:0 28px 80px rgba(0,0,0,.35);color:#fff;border:1px solid rgba(255,255,255,.08)}
+    .login-card h1{margin:8px 0}.login-card p{color:#aeb5c7;margin-bottom:24px}.login-card label{display:grid;gap:8px;margin:16px 0}.login-card input{padding:14px 16px;border-radius:12px;border:1px solid #353b4b;background:#11141b;color:#fff;font-size:16px}.login-card button{width:100%;padding:14px;border:0;border-radius:12px;background:#7c5cff;color:#fff;font-weight:700;font-size:16px;cursor:pointer}.error{min-height:22px;color:#ff6b76;margin-top:12px}
+  </style>
+</head>
+<body>
+  <form class="login-card" id="loginForm">
+    <small>NEUROPHOTO PLATFORM</small><h1>Вход в рабочее пространство</h1><p>Используйте аккаунт, созданный владельцем платформы.</p>
+    <label>Email<input type="email" name="email" autocomplete="username" required /></label>
+    <label>Пароль<input type="password" name="password" autocomplete="current-password" required /></label>
+    <button type="submit">Войти</button><div class="error" id="error"></div>
+  </form>
+  <script>
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault(); error.textContent='';
+      const data=Object.fromEntries(new FormData(loginForm));
+      const response=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!response.ok){const body=await response.json().catch(()=>({}));error.textContent=body.detail||'Не удалось войти';return;}
+      location.href='/app';
+    });
+  </script>
+</body></html>

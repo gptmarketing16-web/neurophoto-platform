@@ -1,0 +1,43 @@
+APP_NAME=NeuroPhoto Platform
+APP_ENV=production
+APP_SECRET_KEY=PASTE_A_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+SESSION_COOKIE_NAME=neurophoto_session
+SESSION_TTL_HOURS=24
+SECURE_COOKIES=true
+
+OWNER_EMAIL=your-email@example.com
+OWNER_PASSWORD=CHANGE_TO_A_STRONG_PASSWORD
+OWNER_NAME=Владелец
+
+# Supabase Session pooler (IPv4), port 5432.
+# Replace postgresql:// with postgresql+psycopg:// and add ?sslmode=require.
+DATABASE_URL=postgresql+psycopg://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres?sslmode=require
+
+QUEUE_MODE=redis
+# Copy the native TLS Redis URL from Upstash. It must start with rediss://
+REDIS_URL=rediss://default:PASSWORD@ENDPOINT.upstash.io:6379
+
+STORAGE_BACKEND=s3
+STORAGE_ROOT=/tmp/neurophoto-cache
+# Copy endpoint, region and generated access keys from Supabase Storage > S3.
+S3_ENDPOINT_URL=https://PROJECT_REF.storage.supabase.co/storage/v1/s3
+S3_BUCKET=neurophoto
+S3_ACCESS_KEY=YOUR_SUPABASE_S3_ACCESS_KEY
+S3_SECRET_KEY=YOUR_SUPABASE_S3_SECRET_KEY
+S3_REGION=YOUR_SUPABASE_PROJECT_REGION
+
+IMAGE_PROVIDER=production
+ALLOW_MOCK_FALLBACK=false
+OPENAI_API_KEY=
+OPENAI_API_BASE_URL=https://api.openai.com/v1
+OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_MAX_CONCURRENCY=2
+GEMINI_API_KEY=
+GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+GEMINI_MAX_CONCURRENCY=2
+
+CUSTOMER_ASSET_TTL_MINUTES=30
+OUTPUT_ASSET_TTL_MINUTES=60
+CLEANUP_INTERVAL_SECONDS=60
+MAX_UPLOAD_MB=50

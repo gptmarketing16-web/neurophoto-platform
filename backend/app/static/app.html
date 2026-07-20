@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NeuroPhoto Canvas</title>
+  <link rel="stylesheet" href="/static/canvas.css?v=5" />
+</head>
+<body>
+  <div class="studio" id="studio">
+    <header class="topbar">
+      <div class="brand-block">
+        <button class="icon-btn" id="projectsButton" title="Проекты" aria-label="Проекты">
+          <svg viewBox="0 0 24 24"><path d="M4 6.5h6l1.5 2H20v9H4z"/><path d="M4 6.5v11"/></svg>
+        </button>
+        <a class="brand" href="/app"><span class="brand-symbol"><i></i><i></i><i></i><i></i></span><span>NeuroPhoto</span></a>
+      </div>
+
+      <div class="project-title-wrap">
+        <span class="project-kicker">ПРОЕКТ</span>
+        <input id="projectTitle" class="project-title-input" value="Выберите проект" readonly />
+        <span class="save-state" id="saveState"><span></span> Сохранено</span>
+      </div>
+
+
+      <div class="top-actions">
+        <button class="ghost-btn" id="fitButton" title="Показать все блоки">Вписать</button>
+        <button class="icon-btn" id="themeButton" title="Сменить тему" aria-label="Сменить тему">
+          <svg viewBox="0 0 24 24"><path d="M20 15.2A8 8 0 1 1 8.8 4a6.5 6.5 0 0 0 11.2 11.2z"/></svg>
+        </button>
+        <div class="provider-pill" id="providerPill"><span></span> MOCK</div>
+        <button class="avatar-btn" id="profileButton" title="Профиль и выход">?</button>
+      </div>
+    </header>
+
+    <aside class="toolrail">
+      <button class="tool active" data-tool="select" title="Выбор и перемещение">
+        <svg viewBox="0 0 24 24"><path d="m6 3 11 8-6 2-2 6z"/></svg><span>Курсор</span>
+      </button>
+      <button class="tool" id="addPhotoButton" title="Добавить фото заказчика или вставить Ctrl+V">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg><span>Фото</span>
+      </button>
+      <button class="tool" id="addPromptButton" title="Добавить блок промпта">
+        <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Промпт</span>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="tool" id="diagnosticsButton" title="Диагностика и статистика">
+        <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span>Диагн.</span>
+      </button>
+      <button class="tool" id="connectionsButton" title="API-подключения">
+        <svg viewBox="0 0 24 24"><path d="M8 12a4 4 0 0 1 4-4h3M16 12a4 4 0 0 1-4 4H9"/><path d="M15 5h4v4M9 19H5v-4"/></svg><span>API</span>
+      </button>
+      <button class="tool" id="usersButton" title="Пользователи и права доступа">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2"/><path d="M3 20c0-4 2.5-6 6-6s6 2 6 6M15 15c3 0 5 1.5 5 4"/></svg><span>Люди</span>
+      </button>
+      <button class="tool" id="helpButton" title="Как пользоваться">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.5 2c-.9.5-1.3 1-1.3 2M12 17h.01"/></svg><span>Помощь</span>
+      </button>
+    </aside>
+
+    <main class="canvas-viewport" id="canvasViewport" tabindex="0">
+
+      <div class="project-workspace-toolbar" id="projectWorkspaceToolbar">
+        <div class="edge-style-switch" aria-label="Вид стрелок в блок-схеме">
+          <span>Стрелки</span>
+          <button type="button" data-edge-style="curved" class="active" title="Плавные стрелки">
+            <svg viewBox="0 0 32 22"><path d="M3 4 C13 4 12 18 27 18"/><path d="m23 14 4 4-5 2"/></svg>
+          </button>
+          <button type="button" data-edge-style="orthogonal" title="Угловые стрелки">
+            <svg viewBox="0 0 32 22"><path d="M3 4 H15 V18 H27"/><path d="m23 14 4 4-5 2"/></svg>
+          </button>
+        </div>
+        <div class="workspace-search-wrap">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+          <input id="workspaceSearch" placeholder="Найти в проекте…" autocomplete="off" />
+          <kbd>Ctrl K</kbd>
+          <div class="search-results" id="searchResults"></div>
+        </div>
+        <button class="workspace-note-btn" id="addNoteButton" type="button" title="Добавить заметку на рабочее поле">
+          <svg viewBox="0 0 24 24"><path d="M5 4h14v13l-3 3H5z"/><path d="M8 8h8M8 12h6"/></svg>
+          <span>Заметка</span>
+        </button>
+      </div>
+      <div class="empty-canvas" id="emptyCanvas">
+        <div class="empty-icon"><span></span><span></span><span></span></div>
+        <h1>Создайте визуальный workflow</h1>
+        <p>Добавьте или вставьте фотографии заказчиков, затем создайте блок промпта. Связи появятся автоматически.</p>
+        <div class="empty-actions">
+          <button class="primary-btn" id="emptyAddPhoto">+ Фото заказчика</button>
+          <button class="secondary-btn" id="emptyAddPrompt">+ Промпт</button>
+        </div>
+        <small>Совет: скопируйте фото и нажмите Ctrl+V прямо на поле</small>
+      </div>
+
+      <div class="world" id="world">
+        <svg class="edges" id="edges" aria-hidden="true"></svg>
+        <div id="nodesLayer"></div>
+      </div>
+
+      <div class="canvas-hint" id="canvasHint">Колесо — масштаб · Перетаскивайте пустое поле — перемещение · Ctrl+V — вставить фото</div>
+      <div class="paste-target-hint" id="pasteTargetHint"></div>
+      <div class="minimap" id="minimap"><div class="minimap-world" id="minimapWorld"></div><div class="minimap-view" id="minimapView"></div></div>
+      <div class="zoom-controls">
+        <button id="zoomOut" title="Уменьшить">−</button>
+        <span id="zoomLabel">100%</span>
+        <button id="zoomIn" title="Увеличить">+</button>
+        <button id="resetView" title="Сбросить вид"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M5.5 15a7.5 7.5 0 0 0 12.3 2M18.5 9A7.5 7.5 0 0 0 6.2 7"/></svg></button>
+      </div>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="projects-drawer" id="projectsDrawer">
+    <div class="drawer-head"><div><span class="eyebrow">РАБОЧИЕ ПРОСТРАНСТВА</span><h2>Мои проекты</h2></div><button class="icon-btn" id="closeProjects" aria-label="Закрыть">×</button></div>
+    <button class="new-project-card" id="newProjectButton"><span>+</span><div><strong>Создать проект</strong><small>Новая тематика и отдельный canvas</small></div></button>
+    <div class="projects-list" id="projectsList"></div>
+  </aside>
+
+  <div class="modal-backdrop" id="projectModal">
+    <form class="modal-card" id="projectForm">
+      <div class="modal-head"><div><span class="eyebrow">НОВОЕ ПРОСТРАНСТВО</span><h2>Создать проект</h2></div><button type="button" class="icon-btn" data-close-modal>×</button></div>
+      <label class="field"><span>Название проекта</span><input name="title" required maxlength="160" placeholder="Например: Военные фотосессии" autofocus /></label>
+      <label class="field"><span>Описание</span><textarea name="description" rows="3" placeholder="Что хранится и генерируется в этом проекте"></textarea></label>
+      <div class="field-row"><label class="field"><span>Тематика</span><input name="theme" placeholder="Военная, семейная, деловая…" /></label><label class="field"><span>Теги через запятую</span><input name="tags" placeholder="пары, студия, портрет" /></label></div>
+      <div class="modal-actions"><button type="button" class="secondary-btn" data-close-modal>Отмена</button><button class="primary-btn" type="submit">Создать проект</button></div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="connectionsModal">
+    <div class="modal-card wide-modal">
+      <div class="modal-head"><div><span class="eyebrow">АДМИН · API</span><h2>Подключения моделей</h2><p>Ключи шифруются на сервере и не возвращаются в браузер.</p></div><button type="button" class="icon-btn" data-close-connections>×</button></div>
+      <div class="provider-cards">
+        <section class="provider-card" data-provider="openai">
+          <div class="provider-card-head"><div class="provider-logo openai-logo">◎</div><div><h3>ChatGPT · GPT Image 2</h3><div class="connection-status disconnected"><span></span><b>Не подключено</b></div></div></div>
+          <label class="field token-field"><span>API key / токен интегратора</span><div class="token-input-wrap"><input type="password" class="provider-key" placeholder="Введите ключ" autocomplete="off"/><button class="lock-btn credential-lock locked" type="button" title="Открыть поле API-ключа" aria-label="Открыть поле API-ключа">🔒</button></div><small class="masked-key"></small></label>
+          <div class="field-row"><label class="field"><span>Режим</span><select class="provider-mode"><option value="direct">Прямое API</option><option value="integrator">Интегратор</option></select></label><label class="field"><span>Модель</span><input class="provider-model" placeholder="gpt-image-2"/></label></div>
+          <label class="field"><span>API URL</span><input class="provider-url" placeholder="https://api.openai.com/v1"/></label>
+          <div class="integrator-auth"><div class="field-row"><label class="field"><span>Заголовок токена</span><input class="provider-auth-header" value="Authorization"/></label><label class="field"><span>Префикс</span><input class="provider-auth-prefix" value="Bearer"/></label></div><small>Интегратор должен принимать multipart-запрос по формату из документации проекта.</small></div>
+          <div class="provider-actions"><button class="secondary-btn test-provider" type="button">Проверить</button><button class="primary-btn save-provider" type="button">Сохранить</button></div>
+          <div class="provider-error"></div>
+        </section>
+        <section class="provider-card" data-provider="gemini">
+          <div class="provider-card-head"><div class="provider-logo gemini-logo">✦</div><div><h3>Google AI Studio · Gemini</h3><div class="connection-status disconnected"><span></span><b>Не подключено</b></div></div></div>
+          <label class="field token-field"><span>API key / токен интегратора</span><div class="token-input-wrap"><input type="password" class="provider-key" placeholder="Введите ключ" autocomplete="off"/><button class="lock-btn credential-lock locked" type="button" title="Открыть поле API-ключа" aria-label="Открыть поле API-ключа">🔒</button></div><small class="masked-key"></small></label>
+          <div class="field-row"><label class="field"><span>Режим</span><select class="provider-mode"><option value="direct">Прямое API</option><option value="integrator">Интегратор</option></select></label><label class="field"><span>Модель</span><input class="provider-model" placeholder="gemini-3.1-flash-image"/></label></div>
+          <label class="field"><span>API URL</span><input class="provider-url" placeholder="https://generativelanguage.googleapis.com"/></label>
+          <div class="integrator-auth"><div class="field-row"><label class="field"><span>Заголовок токена</span><input class="provider-auth-header" value="Authorization"/></label><label class="field"><span>Префикс</span><input class="provider-auth-prefix" value="Bearer"/></label></div><small>Для интегратора используется единый multipart-формат NeuroPhoto Bridge.</small></div>
+          <div class="provider-actions"><button class="secondary-btn test-provider" type="button">Проверить</button><button class="primary-btn save-provider" type="button">Сохранить</button></div>
+          <div class="provider-error"></div>
+        </section>
+      </div>
+      <div class="security-note">Для опубликованной версии админ-панель обязательно защищается авторизацией. В локальной версии доступ есть только на вашем компьютере.</div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="usersModal">
+    <div class="modal-card wide-modal users-modal-card">
+      <div class="modal-head"><div><span class="eyebrow">ДОСТУП К ПЛАТФОРМЕ</span><h2>Пользователи</h2><p>Создавайте аккаунты и назначайте проекты.</p></div><button type="button" class="icon-btn" data-close-users>×</button></div>
+      <form id="createUserForm" class="user-create-grid">
+        <label class="field"><span>Имя</span><input name="display_name" placeholder="Анна"/></label>
+        <label class="field"><span>Email</span><input type="email" name="email" required placeholder="anna@example.ru"/></label>
+        <label class="field"><span>Пароль</span><input type="password" name="password" required minlength="10" placeholder="Минимум 10 символов"/></label>
+        <label class="field"><span>Роль</span><select name="role"><option value="operator">Оператор</option><option value="viewer">Наблюдатель</option><option value="owner">Владелец</option></select></label>
+        <label class="field user-project-field"><span>Доступные проекты</span><select name="allowed_project_ids" multiple size="5"></select></label>
+        <button class="primary-btn" type="submit">Создать аккаунт</button>
+      </form>
+      <div class="users-list" id="usersList"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="diagnosticsModal">
+    <div class="modal-card wide-modal diagnostics-modal-card">
+      <div class="modal-head"><div><span class="eyebrow">СОСТОЯНИЕ СЕРВИСА</span><h2>Диагностика</h2><p>Статистика генераций и временного хранилища.</p></div><button type="button" class="icon-btn" data-close-diagnostics>×</button></div>
+      <div class="diagnostic-grid" id="diagnosticGrid"><div class="diagnostic-loading">Загрузка…</div></div>
+      <div class="diagnostic-provider-list" id="diagnosticProviders"></div>
+      <div class="modal-actions"><button class="secondary-btn" id="refreshDiagnostics" type="button">Обновить</button><button class="primary-btn" type="button" data-close-diagnostics>Готово</button></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="helpModal">
+    <div class="modal-card help-card">
+      <div class="modal-head"><div><span class="eyebrow">БЫСТРЫЙ СТАРТ</span><h2>Как работает canvas</h2></div><button type="button" class="icon-btn" data-close-help>×</button></div>
+      <div class="help-steps">
+        <div><b>1</b><p><strong>Добавьте фото заказчиков</strong><span>Кнопкой «Фото», перетаскиванием или Ctrl+V на свободном поле.</span></p></div>
+        <div><b>2</b><p><strong>Добавьте промпт</strong><span>Новый промпт автоматически соединяется со всеми фото в проекте.</span></p></div>
+        <div><b>3</b><p><strong>Загрузите референс</strong><span>Файлом, перетаскиванием или кнопкой «Вставить из буфера».</span></p></div>
+        <div><b>4</b><p><strong>Зафиксируйте данные</strong><span>Замки защищают промпт и референс от случайного изменения.</span></p></div>
+        <div><b>5</b><p><strong>Нажмите «Генерировать»</strong><span>Запустится только выбранный блок.</span></p></div>
+      </div>
+      <div class="modal-actions"><button class="primary-btn" type="button" data-close-help>Понятно</button></div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+
+  <template id="photoNodeTemplate">
+    <article class="node photo-node">
+      <header class="node-head drag-handle">
+        <div class="node-type-icon photo-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg></div>
+        <input class="node-title" maxlength="180" />
+        <button class="node-menu delete-node" title="Удалить">×</button>
+      </header>
+      <div class="photo-dropzone upload-zone">
+        <input type="file" accept="image/*" hidden />
+        <div class="upload-placeholder"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 14v5h14v-5"/></svg><strong>Загрузить или вставить фото</strong><span>PNG, JPG, WEBP · Ctrl+V</span></div>
+        <img class="node-image" alt="Фото заказчика" />
+        <div class="image-overlay"><button type="button">Заменить</button></div>
+      </div>
+      <footer class="node-footer"><span class="status-dot"></span><span class="photo-status">Ожидает фото</span><span class="photo-expiry"></span><span class="edge-handle output-handle"></span></footer>
+    </article>
+  </template>
+
+  <template id="promptNodeTemplate">
+    <article class="node prompt-node">
+      <header class="node-head drag-handle">
+        <div class="node-type-icon prompt-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div>
+        <div class="prompt-title-block"><input class="node-title" maxlength="180" /><span class="reference-number"></span></div>
+        <button class="node-menu delete-node" title="Удалить">×</button>
+        <span class="edge-handle input-handle"></span>
+      </header>
+      <div class="node-body">
+        <div class="compact-label"><span>Системный промпт</span><div class="label-actions"><span class="autosave-label">автосохранение</span><button class="lock-btn prompt-lock" type="button" title="Закрыть системный промпт" aria-label="Закрыть системный промпт">🔓</button></div></div>
+        <textarea class="prompt-text" rows="7" placeholder="Вставьте системный промпт для этой генерации…"></textarea>
+
+        <div class="compact-label"><span>Референс генерации</span><div class="label-actions"><button class="small-action paste-reference" type="button" title="Вставить изображение из буфера обмена">Вставить</button><button class="lock-btn reference-lock" type="button" title="Зафиксировать референс" aria-label="Зафиксировать референс">🔓</button></div></div>
+        <div class="reference-dropzone upload-zone">
+          <input type="file" accept="image/*" hidden />
+          <div class="upload-placeholder"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 14v5h14v-5"/></svg><strong>Загрузить референс</strong><span>Файл, drag-and-drop или Ctrl+V</span></div>
+          <img class="node-image" alt="Референс" />
+          <div class="image-overlay"><button type="button">Заменить</button></div>
+        </div>
+
+        <div class="connections-summary"><span class="links-icon">↗</span><strong class="connection-count">0 фото</strong><span>подключено автоматически</span></div>
+
+        <div class="generation-settings provider-settings">
+          <label><span>Модель</span><select class="provider-select"><option value="openai">ChatGPT</option><option value="gemini">Gemini</option></select></label>
+          <label><span>Формат</span><select class="aspect-ratio"><option value="auto">Авто · по референсу</option><option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:2">3:2</option><option value="3:4">3:4</option><option value="4:3">4:3</option><option value="4:5">4:5</option><option value="5:4">5:4</option><option value="9:16">9:16</option><option value="16:9">16:9</option></select><small class="detected-ratio"></small></label>
+          <label><span>Результатов</span><input class="output-count" type="number" min="1" max="20" value="1" /></label>
+          <label><span>Качество</span><select class="image-quality"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
+        </div>
+
+        <div class="provider-node-status"></div>
+        <button class="generate-btn" type="button"><span class="spark">✦</span><span class="generate-label">Генерировать</span><span class="generate-count"></span></button>
+        <div class="generation-message"></div>
+        <div class="results-section"><div class="results-head"><strong>Результат</strong><span class="result-meta"><span class="result-time"></span><span class="result-expiry"></span></span></div><div class="result-grid"></div></div>
+      </div>
+    </article>
+  </template>
+
+  <template id="noteNodeTemplate">
+    <article class="node note-node">
+      <header class="node-head drag-handle">
+        <div class="node-type-icon note-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v13l-3 3H5z"/><path d="M8 8h8M8 12h6"/></svg></div>
+        <input class="node-title" maxlength="180" />
+        <button class="node-menu delete-node" title="Удалить">×</button>
+      </header>
+      <div class="node-body">
+        <textarea class="note-text" rows="6" placeholder="Комментарий, инструкция или напоминание для команды…"></textarea>
+        <div class="note-actions"><button class="small-action link-note" type="button">↗ Связать стрелкой</button><button class="small-action clear-note-links" type="button">Очистить связи</button></div>
+        <div class="note-link-hint">После нажатия «Связать» кликните по нужному блоку.</div>
+      </div>
+      <span class="edge-handle note-output-handle"></span>
+    </article>
+  </template>
+
+  <script src="/static/canvas.js?v=5"></script>
+</body>
+</html>
