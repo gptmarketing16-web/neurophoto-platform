@@ -10,6 +10,7 @@ const state = {
   provider: 'mock',
   providerStatuses: {},
   pasteTarget: null,
+  canvasPasteArmed: false,
   noteLinkSourceId: null,
   edgeStyle: 'curved',
   lastCanvasPointer: null,
@@ -570,15 +571,21 @@ function setupUploadZone(zone, node, endpointKind, asset, isLocked = () => false
 
 function setPasteTarget(node, kind, zone = null) {
   $$('.upload-zone').forEach(el => el.classList.remove('paste-focus'));
+  state.canvasPasteArmed = false;
   state.pasteTarget = {nodeId: node.id, kind};
   zone?.classList.add('paste-focus');
   const hint = $('#pasteTargetHint');
   hint.textContent = kind === 'reference' ? 'Ctrl+V вставит изображение в этот референс' : 'Ctrl+V заменит фото в этом блоке';
   hint.classList.add('visible');
   clearTimeout(setPasteTarget.timer);
+  const targetNodeId = node.id;
+  const targetKind = kind;
   setPasteTarget.timer = setTimeout(() => {
     hint.classList.remove('visible');
     $$('.upload-zone').forEach(el => el.classList.remove('paste-focus'));
+    if (state.pasteTarget?.nodeId === targetNodeId && state.pasteTarget?.kind === targetKind) {
+      state.pasteTarget = null;
+    }
   }, 2600);
 }
 
@@ -624,12 +631,17 @@ async function readClipboardImage() {
 
 async function handlePastedImage(file, eventTarget) {
   if (!state.project) return openProjectModal();
-  const promptArticle = eventTarget?.closest?.('.prompt-node');
-  if (promptArticle) {
-    const node = state.project.nodes.find(item => item.id === promptArticle.dataset.nodeId);
-    if (node?.config?.reference_locked) return toast('Референс зафиксирован', 'error');
-    return uploadNodeImage(node, 'reference', file);
+
+  // A click on empty canvas explicitly means: create a new customer-photo node.
+  // This is checked before eventTarget because browsers can keep a textarea focused
+  // even after the user clicks a non-focusable canvas area.
+  if (state.canvasPasteArmed) {
+    const position = canvasPositionFromClient(state.lastCanvasPointer?.x, state.lastCanvasPointer?.y, 'photo');
+    const node = await addNode('photo', position, false);
+    if (node) await uploadNodeImage(node, 'photo', file);
+    return;
   }
+
   if (state.pasteTarget) {
     const node = state.project.nodes.find(item => item.id === state.pasteTarget.nodeId);
     if (node) {
@@ -637,6 +649,14 @@ async function handlePastedImage(file, eventTarget) {
       return uploadNodeImage(node, state.pasteTarget.kind, file);
     }
   }
+
+  const promptArticle = eventTarget?.closest?.('.prompt-node');
+  if (promptArticle) {
+    const node = state.project.nodes.find(item => item.id === promptArticle.dataset.nodeId);
+    if (node?.config?.reference_locked) return toast('Референс зафиксирован', 'error');
+    return uploadNodeImage(node, 'reference', file);
+  }
+
   const position = canvasPositionFromClient(state.lastCanvasPointer?.x, state.lastCanvasPointer?.y, 'photo');
   const node = await addNode('photo', position, false);
   if (node) await uploadNodeImage(node, 'photo', file);
@@ -877,9 +897,18 @@ viewport.addEventListener('pointermove', event => {
 
 viewport.addEventListener('pointerdown', event => {
   if (event.button !== 0 && event.button !== 1) return;
-  if (event.target.closest('.node, button, input, textarea, select, .minimap, .project-workspace-toolbar')) return;
+  if (event.target.closest('.node, button, input, textarea, select, .minimap, .project-workspace-toolbar')) {
+    state.canvasPasteArmed = false;
+    return;
+  }
+  state.canvasPasteArmed = true;
   state.pasteTarget = null;
+  clearTimeout(setPasteTarget.timer);
+  $('#pasteTargetHint')?.classList.remove('visible');
   $$('.upload-zone').forEach(el => el.classList.remove('paste-focus'));
+  if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+    document.activeElement.blur();
+  }
   if (state.noteLinkSourceId) beginNoteLink(state.noteLinkSourceId);
   state.pan = {startX:event.clientX, startY:event.clientY, x:state.view.x, y:state.view.y, pointerId:event.pointerId};
   viewport.classList.add('panning');
