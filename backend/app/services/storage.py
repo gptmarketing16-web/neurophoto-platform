@@ -64,6 +64,14 @@ class LocalStorage:
         if path.resolve() != target.resolve():
             shutil.copy2(path, target)
 
+    def copy_key(self, source_key: str, target_key: str) -> None:
+        source = self.absolute(source_key)
+        if not source.exists():
+            raise FileNotFoundError(source_key)
+        target = self.absolute(target_key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
     def delete_key(self, storage_key: str) -> None:
         self.absolute(storage_key).unlink(missing_ok=True)
 
@@ -166,6 +174,31 @@ class S3Storage(LocalStorage):
             storage_key,
             ExtraArgs={"ContentType": self._content_type(storage_key)},
         )
+
+    def copy_key(self, source_key: str, target_key: str) -> None:
+        try:
+            self.client.copy_object(
+                Bucket=self.bucket,
+                Key=target_key,
+                CopySource={"Bucket": self.bucket, "Key": source_key},
+                MetadataDirective="COPY",
+            )
+        except Exception:
+            logger.info("S3 server-side copy is unavailable; using download/upload fallback")
+            source = self.absolute(source_key)
+            if not source.exists():
+                raise FileNotFoundError(source_key)
+            self.client.upload_file(
+                str(source),
+                self.bucket,
+                target_key,
+                ExtraArgs={"ContentType": self._content_type(target_key)},
+            )
+        source_cache = super().absolute(source_key)
+        if source_cache.exists():
+            target_cache = super().absolute(target_key)
+            target_cache.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_cache, target_cache)
 
     def delete_key(self, storage_key: str) -> None:
         # Storage cleanup must never turn a user action into HTTP 500.

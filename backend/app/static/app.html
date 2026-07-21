@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NeuroPhoto Canvas</title>
-  <link rel="stylesheet" href="/static/canvas.css?v=7.3" />
+  <link rel="stylesheet" href="/static/canvas.css?v=7.4" />
 </head>
 <body>
   <div class="studio" id="studio">
@@ -24,6 +24,8 @@
 
 
       <div class="top-actions">
+        <button class="save-changes-btn" id="saveChangesButton" type="button" title="Сохранить все изменения (Ctrl+S)" disabled>Сохранить изменения</button>
+        <button class="ghost-btn" id="alignButton" type="button" title="Расставить фото и промпты по порядку">Выровнять</button>
         <button class="ghost-btn" id="fitButton" title="Показать все блоки">Вписать</button>
         <button class="icon-btn" id="themeButton" title="Сменить тему" aria-label="Сменить тему">
           <svg viewBox="0 0 24 24"><path d="M20 15.2A8 8 0 1 1 8.8 4a6.5 6.5 0 0 0 11.2 11.2z"/></svg>
@@ -61,6 +63,7 @@
     <main class="canvas-viewport" id="canvasViewport" tabindex="0">
 
       <div class="project-workspace-toolbar" id="projectWorkspaceToolbar">
+        <button class="toolbar-collapse-btn" id="workspaceToolbarToggle" type="button" title="Свернуть панель" aria-label="Свернуть панель">»</button>
         <div class="edge-style-switch" aria-label="Вид стрелок в блок-схеме">
           <span>Стрелки</span>
           <button type="button" data-edge-style="curved" class="active" title="Плавные стрелки">
@@ -97,14 +100,30 @@
         <div id="nodesLayer"></div>
       </div>
 
-      <div class="canvas-hint" id="canvasHint">Колесо — масштаб · Перетаскивайте пустое поле — перемещение · Ctrl+V — вставить фото</div>
+      <div class="canvas-hint" id="canvasHint">Колесо — масштаб · Пустое поле — перемещение · Ctrl+V — вставить фото</div>
       <div class="paste-target-hint" id="pasteTargetHint"></div>
-      <div class="minimap" id="minimap"><div class="minimap-world" id="minimapWorld"></div><div class="minimap-view" id="minimapView"></div></div>
-      <div class="zoom-controls">
-        <button id="zoomOut" title="Уменьшить">−</button>
-        <span id="zoomLabel">100%</span>
-        <button id="zoomIn" title="Увеличить">+</button>
-        <button id="resetView" title="Сбросить вид"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M5.5 15a7.5 7.5 0 0 0 12.3 2M18.5 9A7.5 7.5 0 0 0 6.2 7"/></svg></button>
+      <div class="canvas-bottom-tools">
+        <div class="minimap" id="minimap"><div class="minimap-world" id="minimapWorld"></div><div class="minimap-view" id="minimapView"></div></div>
+        <div class="hotkeys-wrap">
+          <button class="hotkeys-button" id="hotkeysButton" type="button" title="Горячие клавиши" aria-label="Горячие клавиши">⌨</button>
+          <div class="hotkeys-popover" id="hotkeysPopover">
+            <div class="hotkeys-title">Горячие клавиши</div>
+            <div><span>Копировать объект</span><kbd>Ctrl C</kbd></div>
+            <div><span>Дублировать объект</span><kbd>Ctrl D</kbd></div>
+            <div><span>Вставить объект / фото</span><kbd>Ctrl V</kbd></div>
+            <div><span>Отменить локальное изменение</span><kbd>Ctrl Z</kbd></div>
+            <div><span>Выделить все объекты</span><kbd>Ctrl A</kbd></div>
+            <div><span>Сохранить изменения</span><kbd>Ctrl S</kbd></div>
+            <div><span>Удалить выделенное</span><kbd>Delete</kbd></div>
+            <div><span>Переместить выделенное</span><kbd>← ↑ ↓ →</kbd></div>
+          </div>
+        </div>
+        <div class="zoom-controls">
+          <button id="zoomOut" title="Уменьшить">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomIn" title="Увеличить">+</button>
+          <button id="resetView" title="Сбросить вид"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M5.5 15a7.5 7.5 0 0 0 12.3 2M18.5 9A7.5 7.5 0 0 0 6.2 7"/></svg></button>
+        </div>
       </div>
     </main>
   </div>
@@ -219,7 +238,7 @@
         <span class="edge-handle input-handle"></span>
       </header>
       <div class="node-body">
-        <div class="compact-label"><span>Системный промпт</span><div class="label-actions"><span class="autosave-label">автосохранение</span><button class="lock-btn prompt-lock" type="button" title="Закрыть системный промпт" aria-label="Закрыть системный промпт">🔓</button></div></div>
+        <div class="compact-label"><span>Системный промпт</span><div class="label-actions"><span class="autosave-label">сохранение сверху</span><button class="lock-btn prompt-lock" type="button" title="Закрыть системный промпт" aria-label="Закрыть системный промпт">🔓</button></div></div>
         <textarea class="prompt-text" rows="7" placeholder="Вставьте системный промпт для этой генерации…"></textarea>
 
         <div class="compact-label"><span>Референс генерации</span><div class="label-actions"><button class="small-action paste-reference" type="button" title="Вставить изображение из буфера обмена">Вставить</button><button class="lock-btn reference-lock" type="button" title="Зафиксировать референс" aria-label="Зафиксировать референс">🔓</button></div></div>
@@ -263,6 +282,6 @@
     </article>
   </template>
 
-  <script src="/static/canvas.js?v=7.3"></script>
+  <script src="/static/canvas.js?v=7.4"></script>
 </body>
 </html>

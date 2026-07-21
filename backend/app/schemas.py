@@ -115,6 +115,16 @@ class NodePatch(BaseModel):
     config: dict | None = None
 
 
+class NodeDuplicateRequest(BaseModel):
+    offset_x: float = 40.0
+    offset_y: float = 40.0
+
+
+class ProjectManualSave(BaseModel):
+    project: dict = Field(default_factory=dict)
+    nodes: list[dict] = Field(default_factory=list)
+
+
 class GenerateNodeRequest(BaseModel):
     output_count: int | None = None
 

@@ -1,15 +1,16 @@
-# NeuroPhoto Platform v7 — Render + Supabase + Upstash
+# NeuroPhoto Platform v7.4 — Render + Supabase + Upstash
 
-Deployment package for a low-cost online test environment:
+Онлайн-версия NeuroPhoto Canvas для Render, Supabase и Upstash.
 
-- Render Web Service: web application and generation worker in one container
-- Supabase: PostgreSQL and private S3-compatible storage
-- Upstash: Redis-compatible generation queue
+## Новое в v7.4
 
-Open `ONLINE_START_RU.md` for the Russian step-by-step instructions.
+- ручная кнопка «Сохранить изменения» и Ctrl+S вместо частых сетевых автосохранений;
+- копирование готового изображения в буфер обмена;
+- копирование проектов и объектов;
+- автоматическое выравнивание фото и промптов;
+- сворачиваемая панель поиска, заметок и стрелок;
+- горячие клавиши, множественное выделение и перемещение стрелками;
+- мини-карта перенесена к управлению масштабом;
+- оптимизировано обновление мини-карты при перемещении canvas.
 
-## Important free-tier limitations
-
-Render free web services sleep after inactivity and have an ephemeral filesystem.
-Supabase free projects can pause after inactivity and have storage/database quotas.
-This setup is suitable for testing and initial users, not guaranteed production uptime.
+Render остаётся бесплатной тестовой средой и может засыпать после периода бездействия.

@@ -3,9 +3,14 @@ const state = {
   project: null,
   view: {x: 80, y: 80, zoom: 1},
   selectedNodeId: null,
+  selectedNodeIds: new Set(),
   pan: null,
   drag: null,
   saveTimers: new Map(),
+  dirtyNodes: new Map(),
+  dirtyProject: {},
+  undoStack: [],
+  undoLocked: false,
   pollTimers: new Map(),
   provider: 'mock',
   providerStatuses: {},
@@ -15,6 +20,9 @@ const state = {
   edgeStyle: 'curved',
   lastCanvasPointer: null,
   currentUser: null,
+  objectClipboard: null,
+  minimapMeta: null,
+  minimapFrame: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -47,7 +55,7 @@ async function loadMe() {
   $('#usersButton').style.display = owner ? '' : 'none';
   $('#connectionsButton').style.display = owner ? '' : 'none';
   if (state.currentUser.role === 'viewer') {
-    ['#addPhotoButton','#addPromptButton','#addNoteButton','#emptyAddPhoto','#emptyAddPrompt','#diagnosticsButton'].forEach(id => { const el=$(id); if(el) el.style.display='none'; });
+    ['#addPhotoButton','#addPromptButton','#addNoteButton','#emptyAddPhoto','#emptyAddPrompt','#diagnosticsButton','#alignButton','#saveChangesButton'].forEach(id => { const el=$(id); if(el) el.style.display='none'; });
   }
 }
 
@@ -81,6 +89,98 @@ function formatBytes(bytes) {
   const units = ['Б', 'КБ', 'МБ', 'ГБ'];
   const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function isEditingTarget(target = document.activeElement) {
+  return Boolean(target?.closest?.('input, textarea, select, [contenteditable="true"]'));
+}
+
+function selectedNodeIds() {
+  if (state.selectedNodeIds.size) return [...state.selectedNodeIds];
+  return state.selectedNodeId ? [state.selectedNodeId] : [];
+}
+
+function updateSelectionUI() {
+  $$('.node').forEach(el => el.classList.toggle('selected', state.selectedNodeIds.has(el.dataset.nodeId)));
+}
+
+function selectNode(nodeId, additive = false) {
+  if (!additive) state.selectedNodeIds.clear();
+  if (additive && state.selectedNodeIds.has(nodeId)) state.selectedNodeIds.delete(nodeId);
+  else state.selectedNodeIds.add(nodeId);
+  state.selectedNodeId = state.selectedNodeIds.has(nodeId) ? nodeId : ([...state.selectedNodeIds].at(-1) || null);
+  updateSelectionUI();
+}
+
+function clearSelection() {
+  state.selectedNodeId = null;
+  state.selectedNodeIds.clear();
+  updateSelectionUI();
+}
+
+function hasUnsavedChanges() {
+  return state.dirtyNodes.size > 0 || Object.keys(state.dirtyProject).length > 0;
+}
+
+function updateDirtyUI() {
+  const dirty = hasUnsavedChanges();
+  const button = $('#saveChangesButton');
+  if (button) {
+    button.disabled = !dirty;
+    button.classList.toggle('dirty', dirty);
+  }
+  if (dirty) setSaveStatus('dirty', 'Есть изменения');
+  else setSaveStatus('saved', 'Сохранено');
+}
+
+function mergeDirtyNode(nodeId, payload) {
+  const previous = state.dirtyNodes.get(nodeId) || {};
+  const merged = {...previous, ...payload};
+  if (previous.config || payload.config) merged.config = {...(previous.config || {}), ...(payload.config || {})};
+  state.dirtyNodes.set(nodeId, merged);
+  updateDirtyUI();
+}
+
+function mergeDirtyProject(payload) {
+  state.dirtyProject = {...state.dirtyProject, ...payload};
+  if (state.dirtyProject.viewport || payload.viewport) {
+    state.dirtyProject.viewport = {...(state.dirtyProject.viewport || {}), ...(payload.viewport || {})};
+  }
+  updateDirtyUI();
+}
+
+function snapshotForUndo() {
+  if (!state.project || state.undoLocked) return;
+  const snapshot = {
+    nodes: state.project.nodes.map(node => ({id:node.id, title:node.title, x:node.x, y:node.y, config:structuredClone(node.config || {})})),
+    viewport: structuredClone(state.view),
+    edgeStyle: state.edgeStyle,
+    projectTitle: state.project.title,
+  };
+  state.undoStack.push(snapshot);
+  if (state.undoStack.length > 35) state.undoStack.shift();
+}
+
+function restoreUndoSnapshot() {
+  const snapshot = state.undoStack.pop();
+  if (!snapshot || !state.project) return toast('Нет локальных изменений для отмены');
+  state.undoLocked = true;
+  const byId = new Map(snapshot.nodes.map(item => [item.id, item]));
+  for (const node of state.project.nodes) {
+    const old = byId.get(node.id);
+    if (!old) continue;
+    node.title = old.title; node.x = old.x; node.y = old.y; node.config = structuredClone(old.config);
+    mergeDirtyNode(node.id, {title:node.title, x:node.x, y:node.y, config:node.config});
+  }
+  state.view = structuredClone(snapshot.viewport);
+  state.edgeStyle = snapshot.edgeStyle;
+  state.project.title = snapshot.projectTitle;
+  $('#projectTitle').value = snapshot.projectTitle;
+  mergeDirtyProject({title:snapshot.projectTitle, viewport:{...state.view, edge_style:state.edgeStyle}});
+  updateEdgeStyleUI();
+  renderCanvas();
+  state.undoLocked = false;
+  toast('Последнее локальное изменение отменено', 'success');
 }
 
 function projectPhotoNodes() { return (state.project?.nodes || []).filter(node => node.node_type === 'photo'); }
@@ -125,9 +225,17 @@ async function loadProjects() {
 }
 
 async function openProject(projectId, closeDrawer = true) {
+  if (state.project && hasUnsavedChanges()) {
+    await saveAllChanges({silent:true});
+  }
   clearAllPolls();
   state.noteLinkSourceId = null;
   state.project = await api(`/api/projects/${projectId}`);
+  state.dirtyNodes.clear();
+  state.dirtyProject = {};
+  state.undoStack = [];
+  state.selectedNodeId = null;
+  state.selectedNodeIds.clear();
   state.view = {
     x: Number(state.project.viewport?.x ?? 80),
     y: Number(state.project.viewport?.y ?? 80),
@@ -140,10 +248,11 @@ async function openProject(projectId, closeDrawer = true) {
   url.searchParams.set('project', projectId);
   history.replaceState({}, '', url);
   $('#projectTitle').value = state.project.title;
-  $('#projectTitle').readOnly = false;
+  $('#projectTitle').readOnly = state.currentUser?.role === 'viewer';
   renderCanvas();
   renderProjectList();
   closeSearchResults();
+  updateDirtyUI();
   if (closeDrawer) closeProjectsDrawer();
 }
 
@@ -160,11 +269,22 @@ function renderProjectList() {
     card.dataset.projectId = project.id;
     card.innerHTML = `
       <div><h3>${escapeHtml(project.title)}</h3><p>${escapeHtml(project.description || project.theme || 'Без описания')}</p></div>
-      <button class="project-delete" type="button" title="Удалить проект">×</button>
+      <div class="project-card-actions"><button class="project-duplicate" type="button" title="Создать копию проекта">⧉</button><button class="project-delete" type="button" title="Удалить проект">×</button></div>
       <div class="project-card-meta"><span>${project.photo_count} фото-блоков</span><span>${project.prompt_count} промптов</span><span>${new Date(project.updated_at).toLocaleDateString('ru-RU')}</span></div>`;
     card.addEventListener('click', event => {
-      if (event.target.closest('.project-delete')) return;
+      if (event.target.closest('.project-delete, .project-duplicate')) return;
       openProject(project.id).catch(error => toast(error.message, 'error'));
+    });
+    $('.project-duplicate', card).addEventListener('click', async event => {
+      event.stopPropagation();
+      try {
+        if (state.project?.id === project.id && hasUnsavedChanges()) await saveAllChanges({silent:true});
+        const duplicate = await api(`/api/projects/${project.id}/duplicate`, {method:'POST'});
+        state.projects = await api('/api/projects');
+        renderProjectList();
+        await openProject(duplicate.id);
+        toast('Копия проекта создана без старых результатов генераций', 'success');
+      } catch (error) { toast(error.message, 'error'); }
     });
     $('.project-delete', card).addEventListener('click', async event => {
       event.stopPropagation();
@@ -219,7 +339,7 @@ function renderNodes() {
     article.dataset.nodeId = node.id;
     article.style.left = `${node.x}px`;
     article.style.top = `${node.y}px`;
-    article.classList.toggle('selected', state.selectedNodeId === node.id);
+    article.classList.toggle('selected', state.selectedNodeIds.has(node.id));
     $('.node-title', article).value = node.title;
     bindCommonNode(article, node);
     if (node.node_type === 'photo') configurePhotoNode(article, node);
@@ -231,8 +351,7 @@ function renderNodes() {
 
 function bindCommonNode(article, node) {
   article.addEventListener('pointerdown', event => {
-    state.selectedNodeId = node.id;
-    $$('.node').forEach(el => el.classList.toggle('selected', el.dataset.nodeId === node.id));
+    selectNode(node.id, event.shiftKey || event.ctrlKey || event.metaKey);
     event.stopPropagation();
   });
 
@@ -245,10 +364,15 @@ function bindCommonNode(article, node) {
 
   const titleInput = $('.node-title', article);
   titleInput.addEventListener('pointerdown', event => event.stopPropagation());
-  titleInput.addEventListener('change', async () => {
-    node.title = titleInput.value.trim() || node.title;
+  titleInput.addEventListener('focus', snapshotForUndo, {once:true});
+  titleInput.addEventListener('input', () => {
+    node.title = titleInput.value.trimStart();
+    mergeDirtyNode(node.id, {title: node.title || 'Без названия'});
+  });
+  titleInput.addEventListener('blur', () => {
+    node.title = titleInput.value.trim() || 'Без названия';
     titleInput.value = node.title;
-    await patchNode(node.id, {title: node.title});
+    mergeDirtyNode(node.id, {title: node.title});
   });
 
   $('.delete-node', article).addEventListener('click', async event => {
@@ -258,6 +382,9 @@ function bindCommonNode(article, node) {
     try {
       await api(`/api/canvas/nodes/${node.id}`, {method: 'DELETE'});
       state.project.nodes = state.project.nodes.filter(item => item.id !== node.id);
+      state.dirtyNodes.delete(node.id);
+      state.selectedNodeIds.delete(node.id);
+      state.selectedNodeId = [...state.selectedNodeIds].at(-1) || null;
       for (const note of projectNoteNodes()) {
         note.config.target_node_ids = (note.config.target_node_ids || []).filter(id => id !== node.id);
       }
@@ -299,6 +426,7 @@ function configurePromptNode(article, node) {
   const promptLock = $('.prompt-lock', article);
   textarea.value = config.prompt_text || '';
   textarea.addEventListener('pointerdown', event => event.stopPropagation());
+  textarea.addEventListener('focus', snapshotForUndo, {once:true});
   textarea.addEventListener('input', () => {
     if (config.prompt_locked) return;
     config.prompt_text = textarea.value;
@@ -310,6 +438,7 @@ function configurePromptNode(article, node) {
   }));
   promptLock.addEventListener('click', event => {
     event.stopPropagation();
+    snapshotForUndo();
     config.prompt_locked = !config.prompt_locked;
     applyPromptLockUI(article, config);
     scheduleNodeConfigSave(node, 0);
@@ -320,6 +449,7 @@ function configurePromptNode(article, node) {
   const refZone = $('.reference-dropzone', article);
   referenceLock.addEventListener('click', event => {
     event.stopPropagation();
+    snapshotForUndo();
     config.reference_locked = !config.reference_locked;
     applyReferenceLockUI(article, config);
     scheduleNodeConfigSave(node, 0);
@@ -350,23 +480,27 @@ function configurePromptNode(article, node) {
   [providerSelect, aspectSelect, countInput, qualitySelect].forEach(control => control.addEventListener('pointerdown', event => event.stopPropagation()));
 
   providerSelect.addEventListener('change', () => {
+    snapshotForUndo();
     config.provider = providerSelect.value;
     config.model = defaultModel(config.provider);
     scheduleNodeConfigSave(node, 0);
     renderNodeProviderStatus(article, config.provider);
   });
   aspectSelect.addEventListener('change', () => {
+    snapshotForUndo();
     config.aspect_ratio = aspectSelect.value;
     $('.detected-ratio', article).textContent = config.aspect_ratio === 'auto' ? `Референс: ${config.detected_aspect_ratio}` : '';
     scheduleNodeConfigSave(node, 0);
   });
   countInput.addEventListener('change', () => {
+    snapshotForUndo();
     config.output_count = Math.max(1, Math.min(20, Number(countInput.value) || 1));
     countInput.value = config.output_count;
     scheduleNodeConfigSave(node, 0);
     updateGenerateAvailability(article, node);
   });
   qualitySelect.addEventListener('change', () => {
+    snapshotForUndo();
     config.quality = qualitySelect.value;
     scheduleNodeConfigSave(node, 0);
   });
@@ -422,6 +556,7 @@ function configureNoteNode(article, node) {
   const textarea = $('.note-text', article);
   textarea.value = config.note_text;
   textarea.addEventListener('pointerdown', event => event.stopPropagation());
+  textarea.addEventListener('focus', snapshotForUndo, {once:true});
   textarea.addEventListener('input', () => {
     config.note_text = textarea.value;
     scheduleNodeConfigSave(node);
@@ -432,6 +567,7 @@ function configureNoteNode(article, node) {
   });
   $('.clear-note-links', article).addEventListener('click', event => {
     event.stopPropagation();
+    snapshotForUndo();
     config.target_node_ids = [];
     scheduleNodeConfigSave(node, 0);
     state.noteLinkSourceId = null;
@@ -453,7 +589,8 @@ async function toggleNoteTarget(noteId, targetId) {
   const ids = new Set(note.config.target_node_ids || []);
   if (ids.has(targetId)) ids.delete(targetId); else ids.add(targetId);
   note.config.target_node_ids = [...ids];
-  await patchNode(note.id, {config: note.config});
+  snapshotForUndo();
+  patchNode(note.id, {config: structuredClone(note.config)});
   state.noteLinkSourceId = null;
   renderCanvas();
   toast(ids.has(targetId) ? 'Стрелка добавлена' : 'Стрелка удалена', 'success');
@@ -524,11 +661,35 @@ function renderGenerationState(article, node) {
       const card = document.createElement('div');
       card.className = 'result-card';
       card.dataset.expiresAt = output.expires_at || '';
-      card.innerHTML = `<img src="${output.url}" alt="Результат ${index + 1}" draggable="false"><span class="result-expiry-badge"></span><a href="${output.url}" target="_blank" title="Открыть оригинал">↗</a>`;
+      card.innerHTML = `<img src="${output.url}" alt="Результат ${index + 1}" draggable="false"><span class="result-expiry-badge"></span><div class="result-actions"><button class="copy-result" type="button" title="Копировать изображение в буфер">⧉</button><a href="${output.url}" download title="Скачать изображение">↓</a><a href="${output.url}" target="_blank" title="Открыть оригинал">↗</a></div>`;
+      $('.copy-result', card).addEventListener('click', event => {
+        event.stopPropagation();
+        copyImageToClipboard(output.url).catch(error => toast(error.message, 'error'));
+      });
       grid.appendChild(card);
     });
     requestAnimationFrame(() => { drawEdges(); renderMinimap(); });
   }
+}
+
+async function copyImageToClipboard(url) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    throw new Error('Этот браузер не поддерживает копирование изображений');
+  }
+  const response = await fetch(url, {credentials:'same-origin'});
+  if (!response.ok) throw new Error(`Не удалось получить изображение: ${response.status}`);
+  const source = await response.blob();
+  let pngBlob = source;
+  if (source.type !== 'image/png') {
+    const bitmap = await createImageBitmap(source);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    pngBlob = await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Не удалось подготовить PNG')), 'image/png'));
+  }
+  await navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})]);
+  toast('Изображение скопировано в буфер', 'success');
 }
 
 function setupUploadZone(zone, node, endpointKind, asset, isLocked = () => false) {
@@ -595,6 +756,7 @@ async function uploadNodeImage(node, endpointKind, file) {
   form.append('file', file, file.name || `clipboard-${Date.now()}.png`);
   setSaveStatus('saving', 'Загрузка…');
   try {
+    if (hasUnsavedChanges()) await saveAllChanges({silent:true});
     await api(`/api/canvas/nodes/${node.id}/${endpointKind}`, {method: 'POST', body: form});
     await reloadCurrentProject();
     setSaveStatus();
@@ -662,41 +824,52 @@ async function handlePastedImage(file, eventTarget) {
   if (node) await uploadNodeImage(node, 'photo', file);
 }
 
-async function patchNode(nodeId, payload) {
-  setSaveStatus('saving');
-  try {
-    const result = await api(`/api/canvas/nodes/${nodeId}`, {
-      method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
-    });
-    setSaveStatus();
-    return result;
-  } catch (error) {
-    setSaveStatus('error');
-    toast(error.message, 'error');
-    throw error;
-  }
+function patchNode(nodeId, payload) {
+  mergeDirtyNode(nodeId, payload);
+  return Promise.resolve(payload);
 }
 
-function scheduleNodeConfigSave(node, delay = 650) {
-  clearTimeout(state.saveTimers.get(node.id));
-  setSaveStatus('saving');
-  state.saveTimers.set(node.id, setTimeout(async () => {
-    try { await patchNode(node.id, {config: node.config}); }
-    finally { state.saveTimers.delete(node.id); }
-  }, delay));
+function scheduleNodeConfigSave(node) {
+  mergeDirtyNode(node.id, {config: structuredClone(node.config || {})});
+}
+
+async function saveAllChanges({silent = false} = {}) {
+  if (!state.project || !hasUnsavedChanges()) return true;
+  const nodeEntries = [...state.dirtyNodes.entries()].map(([id, changes]) => ({id, changes:structuredClone(changes)}));
+  const projectPayload = structuredClone(state.dirtyProject);
+  setSaveStatus('saving', 'Сохранение…');
+  const button = $('#saveChangesButton');
+  if (button) button.disabled = true;
+  try {
+    await api(`/api/projects/${state.project.id}/save`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({project:projectPayload, nodes:nodeEntries}),
+    });
+    for (const [id, changes] of nodeEntries.map(item => [item.id, item.changes])) {
+      const current = state.dirtyNodes.get(id);
+      if (current && JSON.stringify(current) === JSON.stringify(changes)) state.dirtyNodes.delete(id);
+    }
+    if (JSON.stringify(state.dirtyProject) === JSON.stringify(projectPayload)) state.dirtyProject = {};
+    updateDirtyUI();
+    refreshProjectsQuietly();
+    if (!silent) toast('Изменения сохранены', 'success');
+    return true;
+  } catch (error) {
+    setSaveStatus('error');
+    if (!silent) toast(error.message, 'error');
+    throw error;
+  } finally {
+    if (button) button.disabled = !hasUnsavedChanges();
+  }
 }
 
 async function flushNodeSave(node) {
-  const timer = state.saveTimers.get(node.id);
-  if (timer) {
-    clearTimeout(timer);
-    state.saveTimers.delete(node.id);
-  }
-  await patchNode(node.id, {config: node.config});
+  if (!state.dirtyNodes.has(node.id)) return;
+  await saveAllChanges({silent:true});
 }
 
 async function startGeneration(node, article) {
-  await flushNodeSave(node);
+  if (hasUnsavedChanges()) await saveAllChanges({silent:true});
   const button = $('.generate-btn', article);
   button.disabled = true;
   button.classList.add('running');
@@ -744,6 +917,7 @@ function clearAllPolls() { for (const timer of state.pollTimers.values()) clearT
 
 async function reloadCurrentProject(resetView = false) {
   if (!state.project) return;
+  if (hasUnsavedChanges()) await saveAllChanges({silent:true});
   const currentView = {...state.view};
   state.project = await api(`/api/projects/${state.project.id}`);
   if (!resetView) state.view = currentView;
@@ -761,6 +935,7 @@ function bindNodeDrag(article, node) {
     if (event.button !== 0 || event.target.closest('input,button,textarea,select')) return;
     event.preventDefault();
     event.stopPropagation();
+    snapshotForUndo();
     state.drag = {node, article, startX:event.clientX, startY:event.clientY, nodeX:node.x, nodeY:node.y, pointerId:event.pointerId};
     handle.setPointerCapture?.(event.pointerId);
   });
@@ -777,7 +952,7 @@ function bindNodeDrag(article, node) {
     if (!state.drag || state.drag.node.id !== node.id) return;
     handle.releasePointerCapture?.(event.pointerId);
     state.drag = null;
-    await patchNode(node.id, {x: node.x, y: node.y});
+    patchNode(node.id, {x: node.x, y: node.y});
   };
   handle.addEventListener('pointerup', finish);
   handle.addEventListener('pointercancel', finish);
@@ -902,6 +1077,7 @@ viewport.addEventListener('pointerdown', event => {
     return;
   }
   state.canvasPasteArmed = true;
+  clearSelection();
   state.pasteTarget = null;
   clearTimeout(setPasteTarget.timer);
   $('#pasteTargetHint')?.classList.remove('visible');
@@ -925,46 +1101,54 @@ const finishPan = event => {
 viewport.addEventListener('pointerup', finishPan);
 viewport.addEventListener('pointercancel', finishPan);
 
-let viewportSaveTimer = null;
 function scheduleViewportSave() {
   if (!state.project) return;
-  clearTimeout(viewportSaveTimer);
-  viewportSaveTimer = setTimeout(() => api(`/api/projects/${state.project.id}`, {
-    method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({viewport:{...state.view, edge_style:state.edgeStyle}}),
-  }).catch(() => {}), 700);
+  mergeDirtyProject({viewport:{...state.view, edge_style:state.edgeStyle}});
 }
 
 function nodeWidth(node) { return node.node_type === 'photo' ? 272 : node.node_type === 'note' ? 320 : 410; }
 function renderMinimap() {
-  const miniWorld = $('#minimapWorld');
-  const miniView = $('#minimapView');
-  miniWorld.innerHTML = '';
-  if (!state.project?.nodes?.length) { $('#minimap').style.display = 'none'; return; }
-  $('#minimap').style.display = '';
-  const nodes = state.project.nodes;
-  const minX = Math.min(...nodes.map(n => n.x)) - 100;
-  const minY = Math.min(...nodes.map(n => n.y)) - 100;
-  const maxX = Math.max(...nodes.map(n => n.x + nodeWidth(n))) + 100;
-  const maxY = Math.max(...nodes.map(n => n.y + 420)) + 100;
-  const width = Math.max(800, maxX - minX);
-  const height = Math.max(500, maxY - minY);
-  const scale = Math.min(150 / width, 92 / height);
-  nodes.forEach(node => {
-    const el = document.createElement('div');
-    el.className = `minimap-node ${node.node_type}`;
-    el.style.left = `${(node.x - minX) * scale}px`;
-    el.style.top = `${(node.y - minY) * scale}px`;
-    el.style.width = `${nodeWidth(node) * scale}px`;
-    el.style.height = `${Math.max(5, (node.node_type === 'photo' ? 290 : node.node_type === 'note' ? 230 : 410) * scale)}px`;
-    miniWorld.appendChild(el);
+  if (state.minimapFrame) return;
+  state.minimapFrame = requestAnimationFrame(() => {
+    state.minimapFrame = null;
+    const mini = $('#minimap');
+    const miniWorld = $('#minimapWorld');
+    const miniView = $('#minimapView');
+    if (!state.project?.nodes?.length) { mini.style.display = 'none'; state.minimapMeta = null; return; }
+    mini.style.display = '';
+    const nodes = state.project.nodes;
+    const layoutKey = nodes.map(n => `${n.id}:${Math.round(n.x)}:${Math.round(n.y)}`).join('|');
+    if (!state.minimapMeta || state.minimapMeta.layoutKey !== layoutKey) {
+      const minX = Math.min(...nodes.map(n => n.x)) - 100;
+      const minY = Math.min(...nodes.map(n => n.y)) - 100;
+      const maxX = Math.max(...nodes.map(n => n.x + nodeWidth(n))) + 100;
+      const maxY = Math.max(...nodes.map(n => n.y + 620)) + 100;
+      const width = Math.max(800, maxX - minX);
+      const height = Math.max(500, maxY - minY);
+      const miniWidth = mini.clientWidth || 170;
+      const miniHeight = mini.clientHeight || 96;
+      const scale = Math.min(miniWidth / width, miniHeight / height);
+      state.minimapMeta = {layoutKey, minX, minY, scale};
+      miniWorld.innerHTML = '';
+      nodes.forEach(node => {
+        const el = document.createElement('div');
+        el.className = `minimap-node ${node.node_type}`;
+        el.style.left = `${(node.x - minX) * scale}px`;
+        el.style.top = `${(node.y - minY) * scale}px`;
+        el.style.width = `${Math.max(3, nodeWidth(node) * scale)}px`;
+        el.style.height = `${Math.max(4, (node.node_type === 'photo' ? 290 : node.node_type === 'note' ? 230 : 500) * scale)}px`;
+        miniWorld.appendChild(el);
+      });
+    }
+    const {minX, minY, scale} = state.minimapMeta;
+    const rect = viewport.getBoundingClientRect();
+    const viewLeft = -state.view.x / state.view.zoom;
+    const viewTop = -state.view.y / state.view.zoom;
+    miniView.style.left = `${(viewLeft - minX) * scale}px`;
+    miniView.style.top = `${(viewTop - minY) * scale}px`;
+    miniView.style.width = `${rect.width / state.view.zoom * scale}px`;
+    miniView.style.height = `${rect.height / state.view.zoom * scale}px`;
   });
-  const rect = viewport.getBoundingClientRect();
-  const viewLeft = -state.view.x / state.view.zoom;
-  const viewTop = -state.view.y / state.view.zoom;
-  miniView.style.left = `${(viewLeft - minX) * scale}px`;
-  miniView.style.top = `${(viewTop - minY) * scale}px`;
-  miniView.style.width = `${rect.width / state.view.zoom * scale}px`;
-  miniView.style.height = `${rect.height / state.view.zoom * scale}px`;
 }
 
 function fitContent() {
@@ -1013,8 +1197,9 @@ async function addNode(type, position = null, showToast = true) {
     });
     state.project.nodes.push(node);
     state.selectedNodeId = node.id;
+    state.selectedNodeIds = new Set([node.id]);
     renderCanvas();
-    setSaveStatus();
+    updateDirtyUI();
     refreshProjectsQuietly();
     if (showToast) {
       const message = type === 'photo' ? 'Добавлен блок фото заказчика' : type === 'note' ? 'Добавлена заметка' : `Добавлен промпт №${node.config.reference_number}. Все фото связаны автоматически.`;
@@ -1028,6 +1213,146 @@ async function addNode(type, position = null, showToast = true) {
   }
 }
 
+const OBJECT_CLIPBOARD_PREFIX = 'NEUROPHOTO_OBJECT_V1:';
+
+async function duplicateSelectedObjects() {
+  const ids = selectedNodeIds();
+  if (!ids.length || !state.project) return toast('Сначала выделите объект');
+  if (hasUnsavedChanges()) await saveAllChanges({silent:true});
+  const created = [];
+  for (let index = 0; index < ids.length; index += 1) {
+    const node = await api(`/api/canvas/nodes/${ids[index]}/duplicate`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({offset_x:40 + index * 18, offset_y:40 + index * 18}),
+    });
+    state.project.nodes.push(node);
+    created.push(node.id);
+  }
+  state.selectedNodeIds = new Set(created);
+  state.selectedNodeId = created.at(-1) || null;
+  renderCanvas();
+  refreshProjectsQuietly();
+  toast(created.length > 1 ? `Создано копий: ${created.length}` : 'Копия объекта создана', 'success');
+}
+
+async function copySelectedObjects() {
+  const ids = selectedNodeIds();
+  if (!ids.length || !state.project) return toast('Сначала выделите объект');
+  const payload = {projectId:state.project.id, nodeIds:ids};
+  state.objectClipboard = payload;
+  const text = OBJECT_CLIPBOARD_PREFIX + JSON.stringify(payload);
+  try { await navigator.clipboard.writeText(text); } catch (_) {}
+  toast(ids.length > 1 ? `Скопировано объектов: ${ids.length}` : 'Объект скопирован', 'success');
+}
+
+async function pasteCopiedObjects(text = '') {
+  let payload = state.objectClipboard;
+  if (text.startsWith(OBJECT_CLIPBOARD_PREFIX)) {
+    try { payload = JSON.parse(text.slice(OBJECT_CLIPBOARD_PREFIX.length)); } catch (_) { payload = null; }
+  }
+  if (!payload?.nodeIds?.length) return false;
+  if (payload.projectId !== state.project?.id) {
+    toast('Копирование объектов между проектами пока не поддерживается', 'error');
+    return true;
+  }
+  state.selectedNodeIds = new Set(payload.nodeIds.filter(id => state.project.nodes.some(node => node.id === id)));
+  state.selectedNodeId = [...state.selectedNodeIds].at(-1) || null;
+  await duplicateSelectedObjects();
+  return true;
+}
+
+async function deleteSelectedObjects() {
+  const ids = selectedNodeIds();
+  if (!ids.length || !state.project) return;
+  if (!confirm(`Удалить выделенные объекты: ${ids.length}?`)) return;
+  for (const id of ids) {
+    await api(`/api/canvas/nodes/${id}`, {method:'DELETE'});
+    state.dirtyNodes.delete(id);
+  }
+  state.project.nodes = state.project.nodes.filter(node => !ids.includes(node.id));
+  for (const note of projectNoteNodes()) {
+    const previous = note.config?.target_node_ids || [];
+    const next = previous.filter(id => !ids.includes(id));
+    if (next.length !== previous.length) {
+      note.config.target_node_ids = next;
+      scheduleNodeConfigSave(note);
+    }
+  }
+  clearSelection();
+  renderCanvas();
+  refreshProjectsQuietly();
+  toast('Выделенные объекты удалены', 'success');
+}
+
+function moveSelectedObjects(dx, dy, record = true) {
+  const ids = selectedNodeIds();
+  if (!ids.length || !state.project) return;
+  if (record) snapshotForUndo();
+  for (const id of ids) {
+    const node = state.project.nodes.find(item => item.id === id);
+    if (!node) continue;
+    node.x = Math.round(node.x + dx);
+    node.y = Math.round(node.y + dy);
+    mergeDirtyNode(node.id, {x:node.x, y:node.y});
+    const article = document.querySelector(`.node[data-node-id="${node.id}"]`);
+    if (article) { article.style.left = `${node.x}px`; article.style.top = `${node.y}px`; }
+  }
+  drawEdges();
+  renderMinimap();
+}
+
+function alignProjectNodes() {
+  if (!state.project?.nodes?.length) return;
+  snapshotForUndo();
+  const photos = projectPhotoNodes();
+  const prompts = [...projectPromptNodes()].sort((a,b) => Number(a.config?.reference_number || 0) - Number(b.config?.reference_number || 0));
+  const notes = projectNoteNodes();
+  const baseY = 100;
+  const promptStartX = 380;
+  const xGap = 450;
+  const rowGap = 90;
+  const rows = [];
+  for (let start = 0; start < prompts.length; start += 10) rows.push(prompts.slice(start, start + 10));
+  let rowY = baseY;
+  for (const row of rows) {
+    let rowHeight = 560;
+    row.forEach((node, column) => {
+      const article = document.querySelector(`.node[data-node-id="${node.id}"]`);
+      rowHeight = Math.max(rowHeight, article?.offsetHeight || 560);
+      node.x = promptStartX + column * xGap;
+      node.y = rowY;
+      mergeDirtyNode(node.id, {x:node.x, y:node.y});
+    });
+    rowY += rowHeight + rowGap;
+  }
+  let photoY = baseY;
+  for (const node of photos) {
+    const article = document.querySelector(`.node[data-node-id="${node.id}"]`);
+    node.x = 30; node.y = photoY;
+    mergeDirtyNode(node.id, {x:node.x, y:node.y});
+    photoY += (article?.offsetHeight || 300) + 45;
+  }
+  let noteY = Math.max(photoY + 50, rowY);
+  for (const node of notes) {
+    node.x = 30; node.y = noteY;
+    mergeDirtyNode(node.id, {x:node.x, y:node.y});
+    noteY += 280;
+  }
+  renderCanvas();
+  fitContent();
+  toast('Объекты выровнены: промпты по 10 в ряд, фото слева', 'success');
+}
+
+function setWorkspaceToolbarCollapsed(collapsed) {
+  const toolbar = $('#projectWorkspaceToolbar');
+  const button = $('#workspaceToolbarToggle');
+  toolbar.classList.toggle('collapsed', collapsed);
+  button.textContent = collapsed ? '«' : '»';
+  button.title = collapsed ? 'Развернуть панель' : 'Свернуть панель';
+  button.setAttribute('aria-label', button.title);
+  storageSet('neurophoto_toolbar_collapsed', collapsed ? '1' : '0');
+}
+
 function centerOnNode(nodeId) {
   const node = state.project?.nodes.find(item => item.id === nodeId);
   const el = document.querySelector(`.node[data-node-id="${nodeId}"]`);
@@ -1035,9 +1360,8 @@ function centerOnNode(nodeId) {
   const rect = viewport.getBoundingClientRect();
   state.view.x = rect.width / 2 - (node.x + el.offsetWidth / 2) * state.view.zoom;
   state.view.y = rect.height / 2 - (node.y + Math.min(el.offsetHeight, 360) / 2) * state.view.zoom;
-  state.selectedNodeId = nodeId;
+  selectNode(nodeId, false);
   applyView();
-  $$('.node').forEach(item => item.classList.toggle('selected', item.dataset.nodeId === nodeId));
   el.animate([{filter:'brightness(1)'},{filter:'brightness(1.25)'},{filter:'brightness(1)'}], {duration:650});
   scheduleViewportSave();
 }
@@ -1212,16 +1536,18 @@ $('#projectForm').addEventListener('submit', async event => {
   finally { button.disabled = false; button.textContent = 'Создать проект'; }
 });
 
-$('#projectTitle').addEventListener('change', async event => {
+$('#projectTitle').addEventListener('focus', snapshotForUndo);
+$('#projectTitle').addEventListener('input', event => {
   if (!state.project) return;
-  const title = event.target.value.trim();
-  if (!title) { event.target.value = state.project.title; return; }
-  try {
-    await api(`/api/projects/${state.project.id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title})});
-    state.project.title = title;
-    refreshProjectsQuietly();
-    setSaveStatus();
-  } catch (error) { toast(error.message, 'error'); event.target.value = state.project.title; }
+  state.project.title = event.target.value;
+  mergeDirtyProject({title:event.target.value.trim() || 'Без названия'});
+});
+$('#projectTitle').addEventListener('blur', event => {
+  if (!state.project) return;
+  const title = event.target.value.trim() || 'Без названия';
+  event.target.value = title;
+  state.project.title = title;
+  mergeDirtyProject({title});
 });
 
 
@@ -1351,6 +1677,7 @@ $('#addNoteButton').addEventListener('click', () => addNode('note'));
 $('#emptyAddPhoto').addEventListener('click', () => addNode('photo'));
 $('#emptyAddPrompt').addEventListener('click', () => addNode('prompt'));
 $$('[data-edge-style]').forEach(button => button.addEventListener('click', () => {
+  snapshotForUndo();
   state.edgeStyle = button.dataset.edgeStyle === 'orthogonal' ? 'orthogonal' : 'curved';
   updateEdgeStyleUI();
   drawEdges();
@@ -1366,27 +1693,73 @@ $('#zoomIn').addEventListener('click', () => setZoom(state.view.zoom * 1.18));
 $('#zoomOut').addEventListener('click', () => setZoom(state.view.zoom / 1.18));
 $('#resetView').addEventListener('click', resetView);
 $('#fitButton').addEventListener('click', fitContent);
+$('#alignButton').addEventListener('click', alignProjectNodes);
+$('#saveChangesButton').addEventListener('click', () => saveAllChanges().catch(() => {}));
+$('#workspaceToolbarToggle').addEventListener('click', () => setWorkspaceToolbarCollapsed(!$('#projectWorkspaceToolbar').classList.contains('collapsed')));
+$('#hotkeysButton').addEventListener('click', event => { event.stopPropagation(); $('#hotkeysPopover').classList.toggle('open'); });
+document.addEventListener('click', event => { if (!event.target.closest('.hotkeys-wrap')) $('#hotkeysPopover').classList.remove('open'); });
 
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; storageSet('neurophoto_theme', theme); }
 applyTheme(storageGet('neurophoto_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+setWorkspaceToolbarCollapsed(storageGet('neurophoto_toolbar_collapsed') === '1');
 $('#themeButton').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 
 window.addEventListener('paste', event => {
   const file = imageFileFromPasteEvent(event);
-  if (!file) return;
-  event.preventDefault();
-  handlePastedImage(file, event.target).catch(error => toast(error.message, 'error'));
+  if (file) {
+    event.preventDefault();
+    handlePastedImage(file, event.target).catch(error => toast(error.message, 'error'));
+    return;
+  }
+  const text = event.clipboardData?.getData('text/plain') || '';
+  if (text.startsWith(OBJECT_CLIPBOARD_PREFIX)) {
+    event.preventDefault();
+    pasteCopiedObjects(text).catch(error => toast(error.message, 'error'));
+  }
 });
 
 window.addEventListener('resize', () => { applyView(); drawEdges(); });
 window.addEventListener('keydown', event => {
+  const key = event.key.toLowerCase();
+  const command = event.ctrlKey || event.metaKey;
+  const editing = isEditingTarget(event.target);
   if (event.key === 'Escape') {
-    closeProjectsDrawer(); closeProjectModal(); closeModal('#helpModal'); closeModal('#connectionsModal'); closeModal('#diagnosticsModal'); closeModal('#usersModal'); closeSearchResults(); $('#profilePopover')?.classList.remove('open');
+    closeProjectsDrawer(); closeProjectModal(); closeModal('#helpModal'); closeModal('#connectionsModal'); closeModal('#diagnosticsModal'); closeModal('#usersModal'); closeSearchResults(); $('#profilePopover')?.classList.remove('open'); $('#hotkeysPopover')?.classList.remove('open');
     if (state.noteLinkSourceId) beginNoteLink(state.noteLinkSourceId);
   }
-  if ((event.ctrlKey || event.metaKey) && event.key === '0') { event.preventDefault(); fitContent(); }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#workspaceSearch').focus(); }
+  if (command && event.key === '0') { event.preventDefault(); fitContent(); return; }
+  if (command && key === 'k') { event.preventDefault(); $('#workspaceSearch').focus(); return; }
+  if (command && key === 's') { event.preventDefault(); saveAllChanges().catch(() => {}); return; }
+  if (editing) return;
+  if (command && key === 'c') { event.preventDefault(); copySelectedObjects().catch(error => toast(error.message, 'error')); return; }
+  if (command && key === 'd') { event.preventDefault(); duplicateSelectedObjects().catch(error => toast(error.message, 'error')); return; }
+  if (command && key === 'z') { event.preventDefault(); restoreUndoSnapshot(); return; }
+  if (command && key === 'a') {
+    event.preventDefault();
+    state.selectedNodeIds = new Set((state.project?.nodes || []).map(node => node.id));
+    state.selectedNodeId = [...state.selectedNodeIds].at(-1) || null;
+    updateSelectionUI();
+    return;
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (selectedNodeIds().length) { event.preventDefault(); deleteSelectedObjects().catch(error => toast(error.message, 'error')); }
+    return;
+  }
+  const arrows = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
+  if (arrows[event.key] && selectedNodeIds().length) {
+    event.preventDefault();
+    const step = event.shiftKey ? 1 : 10;
+    const [dx,dy] = arrows[event.key];
+    moveSelectedObjects(dx * step, dy * step, !event.repeat);
+  }
 });
+
+window.addEventListener('beforeunload', event => {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
 
 loadMe().then(() => Promise.all([loadProviderStatuses(), loadProjects()])).catch(error => {
   toast(`Не удалось запустить студию: ${error.message}`, 'error');

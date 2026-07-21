@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import CurrentUser, assert_project_access
 from ..db import get_db
 from ..models import CanvasGeneration, Project, ProjectAsset, ProjectNode
-from ..schemas import GenerateNodeRequest, NodeCreate, NodePatch, ProjectCreate, ProjectPatch
+from ..schemas import GenerateNodeRequest, NodeCreate, NodeDuplicateRequest, NodePatch, ProjectCreate, ProjectManualSave, ProjectPatch
 from ..services.image_provider import closest_aspect_ratio
 from ..services.idgen import new_id
 from ..services.storage import storage
@@ -120,6 +121,47 @@ def _project_out(project: Project) -> dict[str, Any]:
     }
 
 
+
+
+def _copy_title(db: Session, source_title: str) -> str:
+    base = f"{source_title} — копия"
+    existing = set(db.scalars(select(Project.title).where(Project.title.like(f"{base}%"))).all())
+    if base not in existing:
+        return base
+    index = 2
+    while f"{base} {index}" in existing:
+        index += 1
+    return f"{base} {index}"
+
+
+def _clone_asset_file(
+    source: ProjectAsset, *, project_id: str, node_id: str
+) -> tuple[ProjectAsset | None, str | None]:
+    asset_id = new_id("asset")
+    safe_name = storage.safe_filename(source.original_filename, "image.png")
+    storage_key = (
+        f"projects/{project_id}/nodes/{node_id}/{source.kind}/"
+        f"{asset_id}_{safe_name}"
+    )
+    try:
+        storage.copy_key(source.storage_key, storage_key)
+    except FileNotFoundError:
+        return None, None
+    asset = ProjectAsset(
+        id=asset_id,
+        project_id=project_id,
+        node_id=node_id,
+        generation_id=None,
+        kind=source.kind,
+        order_index=source.order_index,
+        original_filename=source.original_filename,
+        storage_key=storage_key,
+        mime_type=source.mime_type,
+        sha256=source.sha256,
+    )
+    return asset, storage_key
+
+
 def next_reference_number(project: Project) -> int:
     numbers: list[int] = []
     for node in project.nodes:
@@ -180,6 +222,72 @@ def create_project(payload: ProjectCreate, user: CurrentUser, db: Session = Depe
     return _project_out(_load_project(db, project.id, user))
 
 
+@router.post("/api/projects/{project_id}/duplicate", status_code=201)
+def duplicate_project(
+    project_id: str, user: CurrentUser, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    source = _load_project(db, project_id, user, write=True)
+    copied_keys: list[str] = []
+    try:
+        duplicate = Project(
+            id=new_id("prj"),
+            title=_copy_title(db, source.title),
+            description=source.description,
+            theme=source.theme,
+            tags=deepcopy(source.tags or []),
+            viewport=deepcopy(source.viewport or {"x": 80.0, "y": 80.0, "zoom": 1.0}),
+        )
+        db.add(duplicate)
+        db.flush()
+
+        node_map: dict[str, ProjectNode] = {}
+        for source_node in sorted(source.nodes, key=lambda item: item.created_at):
+            copied = ProjectNode(
+                id=new_id("node"),
+                project_id=duplicate.id,
+                node_type=source_node.node_type,
+                title=source_node.title,
+                x=source_node.x,
+                y=source_node.y,
+                config=deepcopy(source_node.config or {}),
+            )
+            db.add(copied)
+            node_map[source_node.id] = copied
+        db.flush()
+
+        for source_node in source.nodes:
+            copied = node_map[source_node.id]
+            if copied.node_type == "note":
+                config = deepcopy(copied.config or {})
+                config["target_node_ids"] = [
+                    node_map[target_id].id
+                    for target_id in config.get("target_node_ids", [])
+                    if target_id in node_map
+                ]
+                copied.config = config
+            for source_asset in source_node.assets:
+                if source_asset.generation_id is not None or source_asset.kind not in {"reference", "customer_photo"}:
+                    continue
+                cloned, storage_key = _clone_asset_file(
+                    source_asset, project_id=duplicate.id, node_id=copied.id
+                )
+                if cloned:
+                    db.add(cloned)
+                    if storage_key:
+                        copied_keys.append(storage_key)
+
+        if user.role != "owner":
+            user.allowed_project_ids = list(
+                dict.fromkeys([*(user.allowed_project_ids or []), duplicate.id])
+            )
+        db.commit()
+        return _project_out(_load_project(db, duplicate.id, user))
+    except Exception:
+        db.rollback()
+        storage.delete_keys(copied_keys)
+        raise
+
+
 @router.get("/api/projects/{project_id}")
 def get_project(project_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> dict[str, Any]:
     return _project_out(_load_project(db, project_id, user))
@@ -218,6 +326,69 @@ def patch_project(
     project.updated_at = utcnow()
     db.commit()
     return _project_out(_load_project(db, project_id, user))
+
+
+@router.post("/api/projects/{project_id}/save")
+def save_project_changes(
+    project_id: str,
+    payload: ProjectManualSave,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    project = _load_project(db, project_id, user, write=True)
+    project_values = dict(payload.project or {})
+    if "title" in project_values:
+        title = str(project_values.get("title") or "").strip()
+        if not title:
+            raise HTTPException(422, "Название проекта не может быть пустым")
+        project.title = title
+    if "viewport" in project_values and project_values["viewport"] is not None:
+        viewport = dict(project_values["viewport"] or {})
+        edge_style = str(viewport.get("edge_style", (project.viewport or {}).get("edge_style", "curved")))
+        if edge_style not in {"curved", "orthogonal"}:
+            edge_style = "curved"
+        project.viewport = {
+            "x": float(viewport.get("x", 0)),
+            "y": float(viewport.get("y", 0)),
+            "zoom": max(0.15, min(2.5, float(viewport.get("zoom", 1)))),
+            "edge_style": edge_style,
+        }
+
+    node_by_id = {node.id: node for node in project.nodes}
+    saved_nodes = 0
+    for item in payload.nodes:
+        node_id = str(item.get("id") or "")
+        node = node_by_id.get(node_id)
+        if not node:
+            continue
+        values = dict(item.get("changes") or {})
+        if "title" in values:
+            node.title = str(values.get("title") or "").strip() or node.title
+        if "x" in values:
+            node.x = float(values["x"])
+        if "y" in values:
+            node.y = float(values["y"])
+        if "config" in values and values["config"] is not None:
+            old_config = dict(node.config or {})
+            incoming = dict(values["config"] or {})
+            merged = dict(old_config)
+            merged.update(incoming)
+            if old_config.get("prompt_locked") and incoming.get("prompt_locked", True):
+                if "prompt_text" in incoming and incoming.get("prompt_text") != old_config.get("prompt_text"):
+                    raise HTTPException(423, "Системный промпт заблокирован")
+            if "output_count" in merged:
+                merged["output_count"] = max(1, min(20, int(merged["output_count"])))
+            if node.node_type == "note":
+                valid_ids = {candidate.id for candidate in project.nodes if candidate.id != node.id}
+                merged["target_node_ids"] = [
+                    target_id for target_id in merged.get("target_node_ids", []) if target_id in valid_ids
+                ]
+            node.config = merged
+        node.updated_at = utcnow()
+        saved_nodes += 1
+    project.updated_at = utcnow()
+    db.commit()
+    return {"saved": True, "nodes": saved_nodes, "updated_at": project.updated_at}
 
 
 @router.delete("/api/projects/{project_id}", status_code=204)
@@ -289,6 +460,73 @@ def create_node(
             )
         )
     )
+
+
+@router.post("/api/canvas/nodes/{node_id}/duplicate", status_code=201)
+def duplicate_node(
+    node_id: str,
+    payload: NodeDuplicateRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    source = db.scalar(
+        select(ProjectNode)
+        .where(ProjectNode.id == node_id)
+        .options(
+            selectinload(ProjectNode.assets),
+            selectinload(ProjectNode.project).selectinload(Project.nodes),
+        )
+    )
+    if not source:
+        raise HTTPException(404, "Блок не найден")
+    assert_project_access(user, source.project_id, write=True)
+    config = deepcopy(source.config or {})
+    title = source.title
+    if source.node_type == "prompt":
+        number = next_reference_number(source.project)
+        old_number = config.get("reference_number")
+        config["reference_number"] = number
+        if title == f"Генерация №{old_number}" or title.startswith("Генерация №"):
+            title = f"Генерация №{number}"
+    copied = ProjectNode(
+        id=new_id("node"),
+        project_id=source.project_id,
+        node_type=source.node_type,
+        title=title,
+        x=source.x + float(payload.offset_x),
+        y=source.y + float(payload.offset_y),
+        config=config,
+    )
+    db.add(copied)
+    db.flush()
+    copied_keys: list[str] = []
+    try:
+        for source_asset in source.assets:
+            if source_asset.generation_id is not None or source_asset.kind not in {"reference", "customer_photo"}:
+                continue
+            cloned, storage_key = _clone_asset_file(
+                source_asset, project_id=source.project_id, node_id=copied.id
+            )
+            if cloned:
+                db.add(cloned)
+                if storage_key:
+                    copied_keys.append(storage_key)
+        source.project.updated_at = utcnow()
+        db.commit()
+        return _node_out(
+            db.scalar(
+                select(ProjectNode)
+                .where(ProjectNode.id == copied.id)
+                .options(
+                    selectinload(ProjectNode.assets),
+                    selectinload(ProjectNode.generations).selectinload(CanvasGeneration.assets),
+                )
+            )
+        )
+    except Exception:
+        db.rollback()
+        storage.delete_keys(copied_keys)
+        raise
 
 
 @router.patch("/api/canvas/nodes/{node_id}")
