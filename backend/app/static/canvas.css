@@ -204,8 +204,11 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .modal-card { width: min(590px, 96vw); max-height: 90vh; overflow-y: auto; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 25px 80px rgba(0,0,0,.28); padding: 22px; }
 .modal-card .field { display: flex; flex-direction: column; gap: 7px; margin-top: 16px; }
 .modal-card .field > span { font-size: 11px; font-weight: 700; }
-.modal-card input, .modal-card textarea { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); outline: 0; padding: 11px 12px; resize: vertical; }
-.modal-card input:focus, .modal-card textarea:focus { border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-soft); }
+.modal-card input, .modal-card textarea, .modal-card select { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); outline: 0; padding: 11px 12px; resize: vertical; }
+.modal-card input:focus, .modal-card textarea:focus, .modal-card select:focus { border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-soft); }
+.modal-card .agent-base-field { display: none; }
+.modal-card .agent-base-field.visible { display: flex; }
+.modal-card .agent-base-field small { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .modal-actions { margin-top: 22px; display: flex; justify-content: flex-end; gap: 9px; }
 .help-steps { margin-top: 18px; display: grid; gap: 10px; }
@@ -462,7 +465,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .save-changes-btn { padding: 0 10px; font-size: 11px; }
 }
 
-/* v7.5 — spaces for AI agents, selection tools and full references */
+/* v7.6 — AI conveyor from an existing Users project */
 .canvas-viewport { cursor: default; }
 .canvas-viewport.tool-hand { cursor: grab; }
 .canvas-viewport.tool-hand.panning,

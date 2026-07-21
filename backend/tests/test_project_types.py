@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.api.automation import _normalize_theme
 from app.auth import assert_project_access
+from app.schemas import ProjectCreate
 
 
 def user(role: str):
@@ -23,3 +24,13 @@ def test_owner_can_edit_agent_project():
 
 def test_theme_normalization_for_queue():
     assert _normalize_theme('  СВО   Семья ') == 'сво семья'
+
+
+def test_project_create_accepts_users_base_for_agent_payload():
+    payload = ProjectCreate(title='СВО — конвейер 2', project_type='agent', base_project_id='prj_source')
+    assert payload.base_project_id == 'prj_source'
+
+
+def test_project_create_base_is_optional():
+    payload = ProjectCreate(title='Пустой проект')
+    assert payload.base_project_id is None

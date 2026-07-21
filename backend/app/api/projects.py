@@ -148,7 +148,7 @@ def _copy_title(db: Session, source_title: str) -> str:
 
 
 def _clone_asset_file(
-    source: ProjectAsset, *, project_id: str, node_id: str
+    source: ProjectAsset, *, project_id: str, node_id: str, generation_id: str | None = None
 ) -> tuple[ProjectAsset | None, str | None]:
     asset_id = new_id("asset")
     safe_name = storage.safe_filename(source.original_filename, "image.png")
@@ -164,7 +164,7 @@ def _clone_asset_file(
         id=asset_id,
         project_id=project_id,
         node_id=node_id,
-        generation_id=None,
+        generation_id=generation_id,
         kind=source.kind,
         order_index=source.order_index,
         original_filename=source.original_filename,
@@ -173,6 +173,85 @@ def _clone_asset_file(
         sha256=source.sha256,
     )
     return asset, storage_key
+
+
+def _clone_project_contents(
+    db: Session,
+    source: Project,
+    duplicate: Project,
+    copied_keys: list[str],
+    *,
+    include_generations: bool,
+    include_all_assets: bool,
+) -> None:
+    node_map: dict[str, ProjectNode] = {}
+    for source_node in sorted(source.nodes, key=lambda item: item.created_at):
+        copied = ProjectNode(
+            id=new_id("node"),
+            project_id=duplicate.id,
+            node_type=source_node.node_type,
+            title=source_node.title,
+            x=source_node.x,
+            y=source_node.y,
+            config=deepcopy(source_node.config or {}),
+        )
+        db.add(copied)
+        node_map[source_node.id] = copied
+    db.flush()
+
+    for source_node in source.nodes:
+        copied = node_map[source_node.id]
+        if copied.node_type == "note":
+            config = deepcopy(copied.config or {})
+            config["target_node_ids"] = [
+                node_map[target_id].id
+                for target_id in config.get("target_node_ids", [])
+                if target_id in node_map
+            ]
+            copied.config = config
+
+    generation_map: dict[str, CanvasGeneration] = {}
+    if include_generations:
+        for source_node in source.nodes:
+            for source_generation in sorted(source_node.generations, key=lambda item: item.created_at):
+                copied_generation = CanvasGeneration(
+                    id=new_id("gen"),
+                    project_id=duplicate.id,
+                    prompt_node_id=node_map[source_node.id].id,
+                    status=source_generation.status,
+                    output_count=source_generation.output_count,
+                    provider=source_generation.provider,
+                    error_message=source_generation.error_message,
+                    created_at=source_generation.created_at,
+                    started_at=source_generation.started_at,
+                    completed_at=source_generation.completed_at,
+                )
+                db.add(copied_generation)
+                generation_map[source_generation.id] = copied_generation
+        db.flush()
+
+    for source_node in source.nodes:
+        copied_node = node_map[source_node.id]
+        for source_asset in source_node.assets:
+            if not include_all_assets:
+                if source_asset.generation_id is not None or source_asset.kind not in {"reference", "customer_photo"}:
+                    continue
+            generation_id = None
+            if source_asset.generation_id is not None:
+                copied_generation = generation_map.get(source_asset.generation_id)
+                if copied_generation is None:
+                    continue
+                generation_id = copied_generation.id
+            cloned, storage_key = _clone_asset_file(
+                source_asset,
+                project_id=duplicate.id,
+                node_id=copied_node.id,
+                generation_id=generation_id,
+            )
+            if cloned:
+                db.add(cloned)
+                if storage_key:
+                    copied_keys.append(storage_key)
 
 
 def next_reference_number(project: Project) -> int:
@@ -244,21 +323,55 @@ def create_project(payload: ProjectCreate, user: CurrentUser, db: Session = Depe
         raise HTTPException(422, "project_type должен быть user или agent")
     if project_type == "agent" and user.role != "owner":
         raise HTTPException(403, "Проекты AI-агента создаёт только владелец")
-    project = Project(
-        id=new_id("prj"),
-        title=title,
-        description=payload.description.strip(),
-        theme=payload.theme.strip(),
-        project_type=project_type,
-        tags=[tag.strip() for tag in payload.tags if tag.strip()],
-        viewport={"x": 80.0, "y": 80.0, "zoom": 1.0, "edge_style": "curved"},
-    )
-    db.add(project)
-    db.commit()
-    if user.role != "owner":
-        user.allowed_project_ids = list(dict.fromkeys([*(user.allowed_project_ids or []), project.id]))
+
+    base_project_id = str(payload.base_project_id or "").strip() or None
+    source: Project | None = None
+    if base_project_id:
+        if project_type != "agent":
+            raise HTTPException(422, "Основа из Users доступна только для проекта AI-агента")
+        if user.role != "owner":
+            raise HTTPException(403, "Основание AI-конвейера выбирает только владелец")
+        source = _load_project(db, base_project_id, user)
+        if (source.project_type or "user") != "user":
+            raise HTTPException(422, "Основой может быть только проект из раздела Users")
+
+    copied_keys: list[str] = []
+    try:
+        project = Project(
+            id=new_id("prj"),
+            title=title,
+            description=payload.description.strip() or (source.description if source else ""),
+            theme=payload.theme.strip() or (source.theme if source else ""),
+            project_type=project_type,
+            tags=(
+                [tag.strip() for tag in payload.tags if tag.strip()]
+                or (deepcopy(source.tags or []) if source else [])
+            ),
+            viewport=(
+                deepcopy(source.viewport or {"x": 80.0, "y": 80.0, "zoom": 1.0, "edge_style": "curved"})
+                if source
+                else {"x": 80.0, "y": 80.0, "zoom": 1.0, "edge_style": "curved"}
+            ),
+        )
+        db.add(project)
+        db.flush()
+        if source:
+            _clone_project_contents(
+                db,
+                source,
+                project,
+                copied_keys,
+                include_generations=True,
+                include_all_assets=True,
+            )
+        if user.role != "owner":
+            user.allowed_project_ids = list(dict.fromkeys([*(user.allowed_project_ids or []), project.id]))
         db.commit()
-    return _project_out(_load_project(db, project.id, user))
+        return _project_out(_load_project(db, project.id, user))
+    except Exception:
+        db.rollback()
+        storage.delete_keys(copied_keys)
+        raise
 
 
 @router.post("/api/projects/{project_id}/duplicate", status_code=201)
@@ -280,41 +393,14 @@ def duplicate_project(
         db.add(duplicate)
         db.flush()
 
-        node_map: dict[str, ProjectNode] = {}
-        for source_node in sorted(source.nodes, key=lambda item: item.created_at):
-            copied = ProjectNode(
-                id=new_id("node"),
-                project_id=duplicate.id,
-                node_type=source_node.node_type,
-                title=source_node.title,
-                x=source_node.x,
-                y=source_node.y,
-                config=deepcopy(source_node.config or {}),
-            )
-            db.add(copied)
-            node_map[source_node.id] = copied
-        db.flush()
-
-        for source_node in source.nodes:
-            copied = node_map[source_node.id]
-            if copied.node_type == "note":
-                config = deepcopy(copied.config or {})
-                config["target_node_ids"] = [
-                    node_map[target_id].id
-                    for target_id in config.get("target_node_ids", [])
-                    if target_id in node_map
-                ]
-                copied.config = config
-            for source_asset in source_node.assets:
-                if source_asset.generation_id is not None or source_asset.kind not in {"reference", "customer_photo"}:
-                    continue
-                cloned, storage_key = _clone_asset_file(
-                    source_asset, project_id=duplicate.id, node_id=copied.id
-                )
-                if cloned:
-                    db.add(cloned)
-                    if storage_key:
-                        copied_keys.append(storage_key)
+        _clone_project_contents(
+            db,
+            source,
+            duplicate,
+            copied_keys,
+            include_generations=False,
+            include_all_assets=False,
+        )
 
         if user.role != "owner":
             user.allowed_project_ids = list(

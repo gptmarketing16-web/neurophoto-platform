@@ -1541,11 +1541,38 @@ function closeSearchResults() { $('#searchResults').classList.remove('open'); }
 
 function openProjectsDrawer() { $('#projectsDrawer').classList.add('open'); $('#drawerBackdrop').classList.add('open'); refreshProjectsQuietly(); }
 function closeProjectsDrawer() { $('#projectsDrawer').classList.remove('open'); $('#drawerBackdrop').classList.remove('open'); }
+function populateBaseProjectOptions() {
+  const select = $('#baseProjectSelect');
+  if (!select) return;
+  const previous = select.value;
+  const userProjects = state.projects
+    .filter(project => project.project_type !== 'agent')
+    .sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+  select.innerHTML = '<option value="">Пустой проект</option>' + userProjects
+    .map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.title)} · ${project.prompt_count || 0} промптов</option>`)
+    .join('');
+  if (userProjects.some(project => project.id === previous)) select.value = previous;
+}
+
+function updateAgentBaseProjectField() {
+  const form = $('#projectForm');
+  const isAgent = form?.project_type?.value === 'agent';
+  const field = $('#agentBaseProjectField');
+  const select = $('#baseProjectSelect');
+  field?.classList.toggle('visible', Boolean(isAgent && state.currentUser?.role === 'owner'));
+  if (select) {
+    select.disabled = !isAgent;
+    if (!isAgent) select.value = '';
+  }
+}
+
 function openProjectModal() {
   const form = $('#projectForm');
+  populateBaseProjectOptions();
   const desired = state.currentUser?.role === 'owner' ? state.projectFilter : 'user';
   const radio = form.querySelector(`input[name="project_type"][value="${desired}"]`);
   if (radio) radio.checked = true;
+  updateAgentBaseProjectField();
   $('#projectModal').classList.add('open');
   setTimeout(() => $('#projectForm input[name="title"]')?.focus(), 100);
 }
@@ -1674,9 +1701,21 @@ $('#projectForm').addEventListener('submit', async event => {
   button.disabled = true;
   button.textContent = 'Создание…';
   try {
+    const baseProjectId = form.project_type.value === 'agent' ? form.base_project_id.value : '';
+    if (baseProjectId && state.project?.id === baseProjectId && hasUnsavedChanges()) {
+      await saveAllChanges({silent:true});
+      state.projects = await api('/api/projects');
+    }
     const project = await api('/api/projects', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:form.title.value, description:form.description.value, theme:form.theme.value, project_type:form.project_type.value, tags:form.tags.value.split(',').map(tag => tag.trim()).filter(Boolean)}),
+      body:JSON.stringify({
+        title:form.title.value,
+        description:form.description.value,
+        theme:form.theme.value,
+        project_type:form.project_type.value,
+        tags:form.tags.value.split(',').map(tag => tag.trim()).filter(Boolean),
+        base_project_id:baseProjectId || null,
+      }),
     });
     state.projectFilter = project.project_type === 'agent' ? 'agent' : 'user';
     form.reset();
@@ -1777,6 +1816,7 @@ $('#projectsButton').addEventListener('click', openProjectsDrawer);
 $('#closeProjects').addEventListener('click', closeProjectsDrawer);
 $('#drawerBackdrop').addEventListener('click', closeProjectsDrawer);
 $('#newProjectButton').addEventListener('click', openProjectModal);
+$$('#projectForm input[name="project_type"]').forEach(input => input.addEventListener('change', updateAgentBaseProjectField));
 $$('[data-project-filter]').forEach(button => button.addEventListener('click', () => {
   state.projectFilter = button.dataset.projectFilter === 'agent' ? 'agent' : 'user';
   renderProjectList();

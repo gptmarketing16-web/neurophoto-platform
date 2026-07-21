@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NeuroPhoto Canvas</title>
-  <link rel="stylesheet" href="/static/canvas.css?v=7.5" />
+  <link rel="stylesheet" href="/static/canvas.css?v=7.6" />
 </head>
 <body>
   <div class="studio" id="studio">
@@ -155,6 +155,7 @@
         <label><input type="radio" name="project_type" value="user" checked><span>👥</span><strong>Для Users</strong><small>Обычная ручная работа менеджеров</small></label>
         <label class="agent-project-choice"><input type="radio" name="project_type" value="agent"><span>🤖</span><strong>Для AI-агента</strong><small>Конвейер, менеджерам только просмотр</small></label>
       </div>
+      <label class="field agent-base-field" id="agentBaseProjectField"><span>Выбрать основу из Users-проекта</span><select name="base_project_id" id="baseProjectSelect"><option value="">Пустой проект</option></select><small>Будут скопированы все блоки, настройки, файлы и результаты. Исходный проект не изменится.</small></label>
       <label class="field"><span>Название проекта</span><input name="title" required maxlength="160" placeholder="Например: СВО — конвейер 1" autofocus /></label>
       <label class="field"><span>Описание</span><textarea name="description" rows="3" placeholder="Что хранится и генерируется в этом проекте"></textarea></label>
       <div class="field-row"><label class="field"><span>Тематика</span><input name="theme" placeholder="Военная, семейная, деловая…" /></label><label class="field"><span>Теги через запятую</span><input name="tags" placeholder="пары, студия, портрет" /></label></div>
@@ -299,6 +300,6 @@
     </article>
   </template>
 
-  <script src="/static/canvas.js?v=7.5"></script>
+  <script src="/static/canvas.js?v=7.6"></script>
 </body>
 </html>

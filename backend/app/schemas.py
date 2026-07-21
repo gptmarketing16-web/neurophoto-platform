@@ -92,6 +92,7 @@ class ProjectCreate(BaseModel):
     theme: str = ""
     project_type: str = "user"
     tags: list[str] = Field(default_factory=list)
+    base_project_id: str | None = None
 
 
 class ProjectPatch(BaseModel):
