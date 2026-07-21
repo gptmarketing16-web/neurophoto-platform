@@ -461,3 +461,77 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .canvas-bottom-tools .minimap { display: none !important; }
   .save-changes-btn { padding: 0 10px; font-size: 11px; }
 }
+
+/* v7.5 — spaces for AI agents, selection tools and full references */
+.canvas-viewport { cursor: default; }
+.canvas-viewport.tool-hand { cursor: grab; }
+.canvas-viewport.tool-hand.panning,
+.canvas-viewport.temporary-hand.panning { cursor: grabbing; }
+.canvas-viewport.temporary-hand { cursor: grab; }
+.canvas-viewport.marquee-active { cursor: crosshair; }
+
+.reference-dropzone { min-height: 230px; background: color-mix(in srgb, var(--bg) 82%, var(--panel-solid)); }
+.reference-dropzone .node-image { object-fit: contain; object-position: center; }
+
+.selection-marquee {
+  display: none; position: absolute; z-index: 35; pointer-events: none;
+  border: 1.5px solid var(--purple); background: color-mix(in srgb, var(--purple) 12%, transparent);
+  border-radius: 4px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--purple) 18%, transparent);
+}
+.selection-marquee.visible { display: block; }
+
+.project-access-badge {
+  display: none; align-items: center; padding: 5px 8px; border-radius: 999px;
+  background: var(--purple-soft); color: var(--purple); font-size: 9px; font-weight: 800; white-space: nowrap;
+}
+.project-access-badge.visible { display: inline-flex; }
+.agent-readonly-banner {
+  display: none; position: absolute; top: 72px; left: 50%; transform: translateX(-50%);
+  z-index: 32; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--purple) 45%, var(--line));
+  border-radius: 10px; background: var(--panel); color: var(--purple); box-shadow: var(--shadow);
+  font-size: 10px; font-weight: 750; pointer-events: none;
+}
+.agent-readonly-banner.visible { display: block; }
+.studio.project-readonly .node input,
+.studio.project-readonly .node textarea,
+.studio.project-readonly .node select { pointer-events: none; }
+.studio.project-readonly .node .delete-node,
+.studio.project-readonly .node .lock-btn,
+.studio.project-readonly .node .paste-reference,
+.studio.project-readonly .node .generate-btn,
+.studio.project-readonly .node .image-overlay,
+.studio.project-readonly .note-actions { display: none !important; }
+.studio.project-readonly .node-head { cursor: default; }
+.studio.project-readonly .upload-zone { cursor: default; }
+
+.project-type-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 16px 12px; }
+.project-type-tabs button {
+  min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-solid);
+  padding: 10px 9px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px;
+  text-align: left; color: var(--muted);
+}
+.project-type-tabs button.active { border-color: var(--purple); color: var(--purple); background: var(--purple-soft); }
+.project-type-tabs button span { font-size: 16px; }
+.project-type-tabs button b { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-type-tabs button em {
+  min-width: 22px; height: 22px; display: grid; place-items: center; border-radius: 999px;
+  background: var(--bg); color: var(--text); font-size: 9px; font-style: normal; font-weight: 800;
+}
+
+.project-type-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+.project-type-choice label {
+  position: relative; display: grid; grid-template-columns: auto 1fr; gap: 2px 9px; align-items: center;
+  padding: 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; background: var(--bg);
+}
+.project-type-choice input { position: absolute; opacity: 0; pointer-events: none; }
+.project-type-choice label:has(input:checked) { border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-soft); }
+.project-type-choice label > span { grid-row: 1 / 3; font-size: 22px; }
+.project-type-choice strong { font-size: 11px; }
+.project-type-choice small { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.project-card-type { display: inline-flex; align-items: center; gap: 4px; color: var(--purple); font-size: 9px; font-weight: 800; }
+.project-card-queue { color: var(--orange); font-weight: 750; }
+
+@media (max-width: 760px) {
+  .project-type-choice { grid-template-columns: 1fr; }
+  .agent-readonly-banner { top: 92px; max-width: 82vw; text-align: center; }
+}

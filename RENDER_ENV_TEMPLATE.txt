@@ -41,3 +41,7 @@ CUSTOMER_ASSET_TTL_MINUTES=30
 OUTPUT_ASSET_TTL_MINUTES=60
 CLEANUP_INTERVAL_SECONDS=60
 MAX_UPLOAD_MB=50
+
+# Необязательно: отдельный токен для будущего FASE2ID → NeuroPhoto.
+# Если не задан, временно используется APP_SECRET_KEY.
+AUTOMATION_API_TOKEN=

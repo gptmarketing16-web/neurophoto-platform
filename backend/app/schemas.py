@@ -90,6 +90,7 @@ class ProjectCreate(BaseModel):
     title: str
     description: str = ""
     theme: str = ""
+    project_type: str = "user"
     tags: list[str] = Field(default_factory=list)
 
 
@@ -97,6 +98,7 @@ class ProjectPatch(BaseModel):
     title: str | None = None
     description: str | None = None
     theme: str | None = None
+    project_type: str | None = None
     tags: list[str] | None = None
     viewport: dict | None = None
 
@@ -139,3 +141,18 @@ class ProjectSummaryOut(BaseModel):
     prompt_count: int
     created_at: datetime
     updated_at: datetime
+
+
+class AutomationOrderCreate(BaseModel):
+    external_order_id: str
+    customer_name: str = ""
+    source: str = ""
+    theme: str
+    generation_numbers: list[int] = Field(default_factory=list)
+    priority: int = 100
+    payload: dict = Field(default_factory=dict)
+
+
+class AutomationOrderStatusPatch(BaseModel):
+    status: str
+    error_message: str | None = None

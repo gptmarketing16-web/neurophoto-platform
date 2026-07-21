@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
 
     max_webhook_secret: str | None = None
+    automation_api_token: str | None = None
     max_bot_token: str | None = None
     max_api_base_url: str = "https://platform-api2.max.ru"
 

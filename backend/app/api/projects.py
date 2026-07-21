@@ -7,12 +7,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import CurrentUser, assert_project_access
 from ..db import get_db
-from ..models import CanvasGeneration, Project, ProjectAsset, ProjectNode
+from ..models import AutomationOrder, CanvasGeneration, Project, ProjectAsset, ProjectNode
 from ..schemas import GenerateNodeRequest, NodeCreate, NodeDuplicateRequest, NodePatch, ProjectCreate, ProjectManualSave, ProjectPatch
 from ..services.image_provider import closest_aspect_ratio
 from ..services.idgen import new_id
@@ -45,7 +45,19 @@ def _load_project(db: Session, project_id: str, user=None, *, write: bool = Fals
     if not project:
         raise HTTPException(404, "Проект не найден")
     if user is not None:
-        assert_project_access(user, project_id, write=write)
+        assert_project_access(user, project_id, write=write, project_type=project.project_type)
+    return project
+
+
+def _assert_project_access_by_id(
+    db: Session, user, project_id: str, *, write: bool = False
+) -> Project:
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    assert_project_access(
+        user, project_id, write=write, project_type=project.project_type
+    )
     return project
 
 
@@ -111,6 +123,7 @@ def _project_out(project: Project) -> dict[str, Any]:
         "title": project.title,
         "description": project.description,
         "theme": project.theme,
+        "project_type": project.project_type or "user",
         "tags": project.tags or [],
         "viewport": project.viewport or {"x": 80, "y": 80, "zoom": 1},
         "nodes": [_node_out(node) for node in nodes],
@@ -183,20 +196,40 @@ def list_projects(user: CurrentUser, db: Session = Depends(get_db)) -> list[dict
             return []
         query = query.where(Project.id.in_(allowed))
     projects = db.scalars(query).all()
-    return [
-        {
+    active_statuses = {"assigned", "preparing", "generating", "delivering"}
+    rows: list[dict[str, Any]] = []
+    for project in projects:
+        assigned_count = 0
+        waiting_count = 0
+        if project.project_type == "agent":
+            assigned_count = db.scalar(
+                select(func.count(AutomationOrder.id)).where(
+                    AutomationOrder.assigned_project_id == project.id,
+                    AutomationOrder.status.in_(active_statuses),
+                )
+            ) or 0
+            waiting_orders = db.scalars(
+                select(AutomationOrder).where(AutomationOrder.status == "queued")
+            ).all()
+            waiting_count = sum(
+                1 for order in waiting_orders
+                if " ".join((order.theme or "").lower().split()) == " ".join((project.theme or "").lower().split())
+            )
+        rows.append({
             "id": project.id,
             "title": project.title,
             "description": project.description,
             "theme": project.theme,
+            "project_type": project.project_type or "user",
             "tags": project.tags or [],
             "photo_count": sum(node.node_type == "photo" for node in project.nodes),
             "prompt_count": sum(node.node_type == "prompt" for node in project.nodes),
+            "active_order_count": assigned_count,
+            "queue_count": waiting_count,
             "created_at": project.created_at,
             "updated_at": project.updated_at,
-        }
-        for project in projects
-    ]
+        })
+    return rows
 
 
 @router.post("/api/projects", status_code=201)
@@ -206,11 +239,17 @@ def create_project(payload: ProjectCreate, user: CurrentUser, db: Session = Depe
     title = payload.title.strip()
     if not title:
         raise HTTPException(422, "Введите название проекта")
+    project_type = payload.project_type.strip().lower()
+    if project_type not in {"user", "agent"}:
+        raise HTTPException(422, "project_type должен быть user или agent")
+    if project_type == "agent" and user.role != "owner":
+        raise HTTPException(403, "Проекты AI-агента создаёт только владелец")
     project = Project(
         id=new_id("prj"),
         title=title,
         description=payload.description.strip(),
         theme=payload.theme.strip(),
+        project_type=project_type,
         tags=[tag.strip() for tag in payload.tags if tag.strip()],
         viewport={"x": 80.0, "y": 80.0, "zoom": 1.0, "edge_style": "curved"},
     )
@@ -234,6 +273,7 @@ def duplicate_project(
             title=_copy_title(db, source.title),
             description=source.description,
             theme=source.theme,
+            project_type="user" if source.project_type == "agent" else (source.project_type or "user"),
             tags=deepcopy(source.tags or []),
             viewport=deepcopy(source.viewport or {"x": 80.0, "y": 80.0, "zoom": 1.0}),
         )
@@ -297,10 +337,7 @@ def get_project(project_id: str, user: CurrentUser, db: Session = Depends(get_db
 def patch_project(
     project_id: str, payload: ProjectPatch, user: CurrentUser, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    assert_project_access(user, project_id, write=True)
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Проект не найден")
+    project = _assert_project_access_by_id(db, user, project_id, write=True)
     values = payload.model_dump(exclude_unset=True)
     if "title" in values:
         title = str(values["title"] or "").strip()
@@ -310,6 +347,13 @@ def patch_project(
     for field in ("description", "theme"):
         if field in values:
             setattr(project, field, str(values[field] or "").strip())
+    if "project_type" in values and values["project_type"] is not None:
+        project_type = str(values["project_type"]).strip().lower()
+        if project_type not in {"user", "agent"}:
+            raise HTTPException(422, "project_type должен быть user или agent")
+        if user.role != "owner":
+            raise HTTPException(403, "Тип проекта меняет только владелец")
+        project.project_type = project_type
     if "tags" in values:
         project.tags = [str(tag).strip() for tag in (values["tags"] or []) if str(tag).strip()]
     if "viewport" in values and values["viewport"] is not None:
@@ -393,10 +437,7 @@ def save_project_changes(
 
 @router.delete("/api/projects/{project_id}", status_code=204)
 def delete_project(project_id: str, user: CurrentUser, db: Session = Depends(get_db)) -> None:
-    assert_project_access(user, project_id, write=True)
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Проект не найден")
+    project = _assert_project_access_by_id(db, user, project_id, write=True)
     storage_keys = list(
         db.scalars(select(ProjectAsset.storage_key).where(ProjectAsset.project_id == project_id)).all()
     )
@@ -479,7 +520,7 @@ def duplicate_node(
     )
     if not source:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, source.project_id, write=True)
+    assert_project_access(user, source.project_id, write=True, project_type=source.project.project_type)
     config = deepcopy(source.config or {})
     title = source.title
     if source.node_type == "prompt":
@@ -541,7 +582,7 @@ def patch_node(node_id: str, payload: NodePatch, user: CurrentUser, db: Session 
     )
     if not node:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, node.project_id, write=True)
+    _assert_project_access_by_id(db, user, node.project_id, write=True)
     values = payload.model_dump(exclude_unset=True)
     if "title" in values:
         node.title = str(values["title"] or "").strip() or node.title
@@ -577,7 +618,7 @@ def delete_node(node_id: str, user: CurrentUser, db: Session = Depends(get_db)) 
     node = db.get(ProjectNode, node_id)
     if not node:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, node.project_id, write=True)
+    _assert_project_access_by_id(db, user, node.project_id, write=True)
     project_id = node.project_id
     generation_ids = list(
         db.scalars(
@@ -669,7 +710,7 @@ async def upload_customer_photo(
     )
     if not node:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, node.project_id, write=True)
+    _assert_project_access_by_id(db, user, node.project_id, write=True)
     return await _replace_node_asset(node=node, kind="customer_photo", upload=file, db=db)
 
 
@@ -684,7 +725,7 @@ async def upload_reference(
     )
     if not node:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, node.project_id, write=True)
+    _assert_project_access_by_id(db, user, node.project_id, write=True)
     return await _replace_node_asset(node=node, kind="reference", upload=file, db=db)
 
 
@@ -702,7 +743,7 @@ async def generate_node(
     )
     if not node:
         raise HTTPException(404, "Блок не найден")
-    assert_project_access(user, node.project_id, write=True)
+    _assert_project_access_by_id(db, user, node.project_id, write=True)
     if node.node_type != "prompt":
         raise HTTPException(422, "Генерация запускается только из промпт-блока")
     config = node.config or {}
@@ -749,7 +790,7 @@ def get_generation(generation_id: str, user: CurrentUser, db: Session = Depends(
     )
     if not generation:
         raise HTTPException(404, "Генерация не найдена")
-    assert_project_access(user, generation.project_id)
+    _assert_project_access_by_id(db, user, generation.project_id)
     return _generation_out(generation)
 
 
@@ -758,7 +799,7 @@ def get_canvas_asset(asset_id: str, user: CurrentUser, db: Session = Depends(get
     asset = db.get(ProjectAsset, asset_id)
     if not asset:
         raise HTTPException(404, "Изображение не найдено")
-    assert_project_access(user, asset.project_id)
+    _assert_project_access_by_id(db, user, asset.project_id)
     path = storage.absolute(asset.storage_key)
     if not path.exists():
         raise HTTPException(410, "Файл отсутствует в хранилище")

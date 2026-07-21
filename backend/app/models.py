@@ -115,6 +115,7 @@ class Project(Base):
     title: Mapped[str] = mapped_column(String(160), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     theme: Mapped[str] = mapped_column(String(120), default="")
+    project_type: Mapped[str] = mapped_column(String(20), default="user", index=True)  # user | agent
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     viewport: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=lambda: {"x": 80.0, "y": 80.0, "zoom": 1.0}
@@ -207,6 +208,30 @@ class ProjectAsset(Base):
 
     node: Mapped[ProjectNode] = relationship(back_populates="assets")
     generation: Mapped[CanvasGeneration | None] = relationship(back_populates="assets")
+
+class AutomationOrder(Base):
+    __tablename__ = "automation_orders"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    external_order_id: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    customer_name: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(40), default="")
+    theme: Mapped[str] = mapped_column(String(120), index=True)
+    generation_numbers: Mapped[list[int]] = mapped_column(JSON, default=list)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    assigned_project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 class ProviderCredential(Base):
     __tablename__ = "provider_credentials"

@@ -111,8 +111,10 @@ def can_access_project(user: User, project_id: str) -> bool:
     return user.role == "owner" or project_id in (user.allowed_project_ids or [])
 
 
-def assert_project_access(user: User, project_id: str, *, write: bool = False) -> None:
+def assert_project_access(user: User, project_id: str, *, write: bool = False, project_type: str | None = None) -> None:
     if not can_access_project(user, project_id):
         raise HTTPException(403, "Нет доступа к этому проекту")
     if write and user.role not in {"owner", "operator"}:
         raise HTTPException(403, "Проект доступен только для просмотра")
+    if write and project_type == "agent" and user.role != "owner":
+        raise HTTPException(403, "Проект AI-агента доступен менеджеру только для просмотра")

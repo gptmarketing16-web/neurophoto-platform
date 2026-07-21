@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .api.admin import router as admin_router
 from .api.auth_api import router as auth_router
+from .api.automation import router as automation_router
 from .api.max_webhook import router as max_router
 from .api.projects import router as projects_router
 from .api.users import router as users_router
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.7.4",
+    version="0.7.5",
     lifespan=lifespan,
     docs_url=None if settings.app_env == "production" else "/docs",
     redoc_url=None if settings.app_env == "production" else "/redoc",
@@ -76,13 +77,14 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(auth_router)
+app.include_router(automation_router)
 app.include_router(projects_router)
 app.include_router(admin_router)
 app.include_router(users_router)
 app.include_router(max_router)
 
 
-PUBLIC_API_PATHS = {"/api/auth/login", "/api/max/webhook"}
+PUBLIC_API_PATHS = {"/api/auth/login", "/api/max/webhook", "/api/automation/orders"}
 
 
 def request_user(request: Request) -> User | None:
@@ -116,7 +118,7 @@ async def auth_and_csrf_middleware(request: Request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"} and user.role == "viewer":
             return JSONResponse({"detail": "Режим только для просмотра"}, status_code=403)
 
-    if request.method not in {"GET", "HEAD", "OPTIONS"} and path.startswith("/api/"):
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and path.startswith("/api/") and path != "/api/automation/orders":
         origin = request.headers.get("origin")
         host = request.headers.get("host", "")
         if origin and urlparse(origin).netloc != host:

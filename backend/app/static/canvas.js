@@ -23,6 +23,11 @@ const state = {
   objectClipboard: null,
   minimapMeta: null,
   minimapFrame: null,
+  projectFilter: 'user',
+  projectReadOnly: false,
+  toolMode: 'select',
+  temporaryHand: false,
+  marquee: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -54,6 +59,8 @@ async function loadMe() {
   const owner = state.currentUser.role === 'owner';
   $('#usersButton').style.display = owner ? '' : 'none';
   $('#connectionsButton').style.display = owner ? '' : 'none';
+  const agentChoice = $('.agent-project-choice');
+  if (agentChoice) agentChoice.style.display = owner ? '' : 'none';
   if (state.currentUser.role === 'viewer') {
     ['#addPhotoButton','#addPromptButton','#addNoteButton','#emptyAddPhoto','#emptyAddPrompt','#diagnosticsButton','#alignButton','#saveChangesButton'].forEach(id => { const el=$(id); if(el) el.style.display='none'; });
   }
@@ -93,6 +100,44 @@ function formatBytes(bytes) {
 
 function isEditingTarget(target = document.activeElement) {
   return Boolean(target?.closest?.('input, textarea, select, [contenteditable="true"]'));
+}
+
+function canEditProject() {
+  return Boolean(state.project) && !state.projectReadOnly && state.currentUser?.role !== 'viewer';
+}
+
+function projectTypeLabel(type) { return type === 'agent' ? 'AI-агент' : 'Users'; }
+
+function applyProjectAccessUI() {
+  state.projectReadOnly = Boolean(
+    state.project && (
+      state.currentUser?.role === 'viewer' ||
+      (state.project.project_type === 'agent' && state.currentUser?.role !== 'owner')
+    )
+  );
+  $('#studio').classList.toggle('project-readonly', state.projectReadOnly);
+  const badge = $('#projectAccessBadge');
+  if (badge) {
+    badge.textContent = state.project?.project_type === 'agent' ? '🤖 AI-агент' : '👥 Users';
+    badge.classList.toggle('visible', Boolean(state.project));
+  }
+  $('#agentReadonlyBanner')?.classList.toggle('visible', Boolean(state.projectReadOnly && state.project?.project_type === 'agent'));
+  const hideEditing = state.projectReadOnly;
+  ['#addPhotoButton','#addPromptButton','#addNoteButton','#emptyAddPhoto','#emptyAddPrompt','#alignButton','#saveChangesButton'].forEach(selector => {
+    const el = $(selector);
+    if (el) el.style.display = hideEditing ? 'none' : '';
+  });
+  if ($('#projectTitle')) $('#projectTitle').readOnly = hideEditing;
+}
+
+function setToolMode(mode, {temporary = false} = {}) {
+  const normalized = mode === 'hand' ? 'hand' : 'select';
+  if (temporary) state.temporaryHand = normalized === 'hand';
+  else { state.toolMode = normalized; state.temporaryHand = false; }
+  const activeMode = state.temporaryHand ? 'hand' : state.toolMode;
+  viewport.classList.toggle('tool-hand', activeMode === 'hand');
+  viewport.classList.toggle('temporary-hand', state.temporaryHand);
+  $$('[data-tool]').forEach(button => button.classList.toggle('active', button.dataset.tool === activeMode));
 }
 
 function selectedNodeIds() {
@@ -231,6 +276,7 @@ async function openProject(projectId, closeDrawer = true) {
   clearAllPolls();
   state.noteLinkSourceId = null;
   state.project = await api(`/api/projects/${projectId}`);
+  state.projectFilter = state.project.project_type === 'agent' ? 'agent' : 'user';
   state.dirtyNodes.clear();
   state.dirtyProject = {};
   state.undoStack = [];
@@ -248,7 +294,7 @@ async function openProject(projectId, closeDrawer = true) {
   url.searchParams.set('project', projectId);
   history.replaceState({}, '', url);
   $('#projectTitle').value = state.project.title;
-  $('#projectTitle').readOnly = state.currentUser?.role === 'viewer';
+  applyProjectAccessUI();
   renderCanvas();
   renderProjectList();
   closeSearchResults();
@@ -258,35 +304,45 @@ async function openProject(projectId, closeDrawer = true) {
 
 function renderProjectList() {
   const list = $('#projectsList');
-  if (!state.projects.length) {
-    list.innerHTML = '<div class="project-card"><div><h3>Пока нет проектов</h3><p>Создайте первое рабочее пространство.</p></div></div>';
+  const agentCount = state.projects.filter(project => project.project_type === 'agent').length;
+  const userCount = state.projects.filter(project => project.project_type !== 'agent').length;
+  $('#agentProjectCount').textContent = agentCount;
+  $('#userProjectCount').textContent = userCount;
+  $$('[data-project-filter]').forEach(button => button.classList.toggle('active', button.dataset.projectFilter === state.projectFilter));
+  const filtered = state.projects.filter(project => (project.project_type === 'agent' ? 'agent' : 'user') === state.projectFilter);
+  if (!filtered.length) {
+    list.innerHTML = `<div class="project-card"><div><h3>Пока нет проектов</h3><p>${state.projectFilter === 'agent' ? 'Создайте конвейер для AI-агента.' : 'Создайте пользовательское рабочее пространство.'}</p></div></div>`;
     return;
   }
   list.innerHTML = '';
-  state.projects.forEach(project => {
+  filtered.forEach(project => {
+    const agent = project.project_type === 'agent';
     const card = document.createElement('article');
     card.className = `project-card ${state.project?.id === project.id ? 'active' : ''}`;
     card.dataset.projectId = project.id;
+    const queue = agent ? `<span class="project-card-queue">Очередь: ${project.queue_count || 0}</span><span>В работе: ${project.active_order_count || 0}</span>` : '';
+    const canManageCard = state.currentUser?.role === 'owner' || (state.currentUser?.role === 'operator' && !agent);
     card.innerHTML = `
-      <div><h3>${escapeHtml(project.title)}</h3><p>${escapeHtml(project.description || project.theme || 'Без описания')}</p></div>
-      <div class="project-card-actions"><button class="project-duplicate" type="button" title="Создать копию проекта">⧉</button><button class="project-delete" type="button" title="Удалить проект">×</button></div>
-      <div class="project-card-meta"><span>${project.photo_count} фото-блоков</span><span>${project.prompt_count} промптов</span><span>${new Date(project.updated_at).toLocaleDateString('ru-RU')}</span></div>`;
+      <div><span class="project-card-type">${agent ? '🤖 AI-агент' : '👥 Users'}</span><h3>${escapeHtml(project.title)}</h3><p>${escapeHtml(project.description || project.theme || 'Без описания')}</p></div>
+      <div class="project-card-actions">${canManageCard ? '<button class="project-duplicate" type="button" title="Создать копию проекта">⧉</button><button class="project-delete" type="button" title="Удалить проект">×</button>' : ''}</div>
+      <div class="project-card-meta"><span>${project.photo_count} фото-блоков</span><span>${project.prompt_count} промптов</span>${queue}<span>${new Date(project.updated_at).toLocaleDateString('ru-RU')}</span></div>`;
     card.addEventListener('click', event => {
       if (event.target.closest('.project-delete, .project-duplicate')) return;
       openProject(project.id).catch(error => toast(error.message, 'error'));
     });
-    $('.project-duplicate', card).addEventListener('click', async event => {
+    $('.project-duplicate', card)?.addEventListener('click', async event => {
       event.stopPropagation();
       try {
         if (state.project?.id === project.id && hasUnsavedChanges()) await saveAllChanges({silent:true});
         const duplicate = await api(`/api/projects/${project.id}/duplicate`, {method:'POST'});
         state.projects = await api('/api/projects');
+        state.projectFilter = duplicate.project_type === 'agent' ? 'agent' : 'user';
         renderProjectList();
         await openProject(duplicate.id);
-        toast('Копия проекта создана без старых результатов генераций', 'success');
+        toast(agent ? 'Создана пользовательская копия проекта AI-агента' : 'Копия проекта создана без старых результатов генераций', 'success');
       } catch (error) { toast(error.message, 'error'); }
     });
-    $('.project-delete', card).addEventListener('click', async event => {
+    $('.project-delete', card)?.addEventListener('click', async event => {
       event.stopPropagation();
       if (!confirm(`Удалить проект «${project.title}» вместе со всеми файлами?`)) return;
       try {
@@ -363,6 +419,7 @@ function bindCommonNode(article, node) {
   });
 
   const titleInput = $('.node-title', article);
+  titleInput.readOnly = state.projectReadOnly;
   titleInput.addEventListener('pointerdown', event => event.stopPropagation());
   titleInput.addEventListener('focus', snapshotForUndo, {once:true});
   titleInput.addEventListener('input', () => {
@@ -377,6 +434,7 @@ function bindCommonNode(article, node) {
 
   $('.delete-node', article).addEventListener('click', async event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     const label = node.node_type === 'photo' ? 'фото-блок' : node.node_type === 'note' ? 'заметку' : 'промпт-блок и его результаты';
     if (!confirm(`Удалить ${label}?`)) return;
     try {
@@ -425,6 +483,7 @@ function configurePromptNode(article, node) {
   const textarea = $('.prompt-text', article);
   const promptLock = $('.prompt-lock', article);
   textarea.value = config.prompt_text || '';
+  textarea.readOnly = state.projectReadOnly || config.prompt_locked;
   textarea.addEventListener('pointerdown', event => event.stopPropagation());
   textarea.addEventListener('focus', snapshotForUndo, {once:true});
   textarea.addEventListener('input', () => {
@@ -438,6 +497,7 @@ function configurePromptNode(article, node) {
   }));
   promptLock.addEventListener('click', event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     snapshotForUndo();
     config.prompt_locked = !config.prompt_locked;
     applyPromptLockUI(article, config);
@@ -449,6 +509,7 @@ function configurePromptNode(article, node) {
   const refZone = $('.reference-dropzone', article);
   referenceLock.addEventListener('click', event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     snapshotForUndo();
     config.reference_locked = !config.reference_locked;
     applyReferenceLockUI(article, config);
@@ -459,6 +520,7 @@ function configurePromptNode(article, node) {
 
   $('.paste-reference', article).addEventListener('click', async event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     if (config.reference_locked) return toast('Сначала откройте референс', 'error');
     const file = await readClipboardImage();
     if (!file) return toast('В буфере обмена нет изображения или браузер не дал доступ', 'error');
@@ -477,7 +539,7 @@ function configurePromptNode(article, node) {
   countInput.value = config.output_count;
   qualitySelect.value = config.quality;
   $('.detected-ratio', article).textContent = config.aspect_ratio === 'auto' ? `Референс: ${config.detected_aspect_ratio}` : '';
-  [providerSelect, aspectSelect, countInput, qualitySelect].forEach(control => control.addEventListener('pointerdown', event => event.stopPropagation()));
+  [providerSelect, aspectSelect, countInput, qualitySelect].forEach(control => { control.disabled = state.projectReadOnly; control.addEventListener('pointerdown', event => event.stopPropagation()); });
 
   providerSelect.addEventListener('change', () => {
     snapshotForUndo();
@@ -518,7 +580,7 @@ function configurePromptNode(article, node) {
 function applyPromptLockUI(article, config) {
   const textarea = $('.prompt-text', article);
   const button = $('.prompt-lock', article);
-  textarea.readOnly = config.prompt_locked;
+  textarea.readOnly = state.projectReadOnly || config.prompt_locked;
   textarea.classList.toggle('locked', config.prompt_locked);
   button.classList.toggle('locked', config.prompt_locked);
   button.textContent = config.prompt_locked ? '🔒' : '🔓';
@@ -535,7 +597,7 @@ function applyReferenceLockUI(article, config) {
   button.textContent = config.reference_locked ? '🔒' : '🔓';
   button.title = config.reference_locked ? 'Открыть референс' : 'Зафиксировать референс';
   button.setAttribute('aria-label', button.title);
-  pasteButton.disabled = config.reference_locked;
+  pasteButton.disabled = state.projectReadOnly || config.reference_locked;
 }
 
 function renderNodeProviderStatus(article, provider) {
@@ -555,6 +617,7 @@ function configureNoteNode(article, node) {
   node.config = config;
   const textarea = $('.note-text', article);
   textarea.value = config.note_text;
+  textarea.readOnly = state.projectReadOnly;
   textarea.addEventListener('pointerdown', event => event.stopPropagation());
   textarea.addEventListener('focus', snapshotForUndo, {once:true});
   textarea.addEventListener('input', () => {
@@ -563,10 +626,12 @@ function configureNoteNode(article, node) {
   });
   $('.link-note', article).addEventListener('click', event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     beginNoteLink(node.id);
   });
   $('.clear-note-links', article).addEventListener('click', event => {
     event.stopPropagation();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     snapshotForUndo();
     config.target_node_ids = [];
     scheduleNodeConfigSave(node, 0);
@@ -584,6 +649,7 @@ function beginNoteLink(noteId) {
 }
 
 async function toggleNoteTarget(noteId, targetId) {
+  if (!canEditProject()) return;
   const note = state.project?.nodes.find(item => item.id === noteId && item.node_type === 'note');
   if (!note) return;
   const ids = new Set(note.config.target_node_ids || []);
@@ -604,7 +670,7 @@ function updateGenerateAvailability(article, node) {
   const photos = uploadedPhotoCount();
   const latest = node.latest_generation;
   const running = latest && ['queued', 'running'].includes(latest.status);
-  button.disabled = running || !hasPrompt || !hasRef || photos < 1;
+  button.disabled = state.projectReadOnly || running || !hasPrompt || !hasRef || photos < 1;
   $('.generate-count', article).textContent = `× ${config.output_count || 1}`;
   if (!running) {
     const missing = [];
@@ -700,6 +766,7 @@ function setupUploadZone(zone, node, endpointKind, asset, isLocked = () => false
     image.src = asset.url;
   }
   const choose = () => {
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     if (isLocked()) return toast(endpointKind === 'reference' ? 'Референс зафиксирован' : 'Поле заблокировано', 'error');
     input.click();
   };
@@ -723,6 +790,7 @@ function setupUploadZone(zone, node, endpointKind, asset, isLocked = () => false
   zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
   zone.addEventListener('drop', event => {
     event.preventDefault();
+    if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     zone.classList.remove('dragover');
     if (isLocked()) return toast('Поле зафиксировано', 'error');
     const file = event.dataTransfer.files?.[0];
@@ -751,6 +819,7 @@ function setPasteTarget(node, kind, zone = null) {
 }
 
 async function uploadNodeImage(node, endpointKind, file) {
+  if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   if (!file?.type?.startsWith('image/')) return toast('Выберите изображение', 'error');
   const form = new FormData();
   form.append('file', file, file.name || `clipboard-${Date.now()}.png`);
@@ -792,6 +861,7 @@ async function readClipboardImage() {
 }
 
 async function handlePastedImage(file, eventTarget) {
+  if (state.project && !canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   if (!state.project) return openProjectModal();
 
   // A click on empty canvas explicitly means: create a new customer-photo node.
@@ -825,15 +895,18 @@ async function handlePastedImage(file, eventTarget) {
 }
 
 function patchNode(nodeId, payload) {
+  if (!canEditProject()) return Promise.resolve(payload);
   mergeDirtyNode(nodeId, payload);
   return Promise.resolve(payload);
 }
 
 function scheduleNodeConfigSave(node) {
+  if (!canEditProject()) return;
   mergeDirtyNode(node.id, {config: structuredClone(node.config || {})});
 }
 
 async function saveAllChanges({silent = false} = {}) {
+  if (state.projectReadOnly) return true;
   if (!state.project || !hasUnsavedChanges()) return true;
   const nodeEntries = [...state.dirtyNodes.entries()].map(([id, changes]) => ({id, changes:structuredClone(changes)}));
   const projectPayload = structuredClone(state.dirtyProject);
@@ -869,6 +942,7 @@ async function flushNodeSave(node) {
 }
 
 async function startGeneration(node, article) {
+  if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   if (hasUnsavedChanges()) await saveAllChanges({silent:true});
   const button = $('.generate-btn', article);
   button.disabled = true;
@@ -932,6 +1006,7 @@ async function refreshProjectsQuietly() {
 function bindNodeDrag(article, node) {
   const handle = $('.drag-handle', article);
   handle.addEventListener('pointerdown', event => {
+    if (!canEditProject() || state.toolMode !== 'select' || state.temporaryHand) return;
     if (event.button !== 0 || event.target.closest('input,button,textarea,select')) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1062,12 +1137,50 @@ viewport.addEventListener('wheel', event => {
   setZoom(state.view.zoom * Math.exp(-event.deltaY * .0012), event.clientX, event.clientY);
 }, {passive: false});
 
+function marqueeRectFromPoints(startX, startY, currentX, currentY) {
+  return {
+    left: Math.min(startX, currentX),
+    top: Math.min(startY, currentY),
+    right: Math.max(startX, currentX),
+    bottom: Math.max(startY, currentY),
+    width: Math.abs(currentX - startX),
+    height: Math.abs(currentY - startY),
+  };
+}
+
+function updateMarquee(currentX, currentY) {
+  if (!state.marquee) return;
+  const box = marqueeRectFromPoints(state.marquee.startX, state.marquee.startY, currentX, currentY);
+  const marquee = $('#selectionMarquee');
+  marquee.style.left = `${box.left}px`;
+  marquee.style.top = `${box.top}px`;
+  marquee.style.width = `${box.width}px`;
+  marquee.style.height = `${box.height}px`;
+  const rect = viewport.getBoundingClientRect();
+  const absolute = {left:rect.left + box.left, top:rect.top + box.top, right:rect.left + box.right, bottom:rect.top + box.bottom};
+  const selected = new Set(state.marquee.baseSelection);
+  $$('.node').forEach(el => {
+    const nodeRect = el.getBoundingClientRect();
+    const intersects = !(nodeRect.right < absolute.left || nodeRect.left > absolute.right || nodeRect.bottom < absolute.top || nodeRect.top > absolute.bottom);
+    if (intersects) selected.add(el.dataset.nodeId);
+  });
+  state.selectedNodeIds = selected;
+  state.selectedNodeId = [...selected].at(-1) || null;
+  updateSelectionUI();
+}
+
 viewport.addEventListener('pointermove', event => {
   state.lastCanvasPointer = {x:event.clientX, y:event.clientY};
-  if (!state.pan) return;
-  state.view.x = state.pan.x + event.clientX - state.pan.startX;
-  state.view.y = state.pan.y + event.clientY - state.pan.startY;
-  applyView();
+  if (state.pan) {
+    state.view.x = state.pan.x + event.clientX - state.pan.startX;
+    state.view.y = state.pan.y + event.clientY - state.pan.startY;
+    applyView();
+    return;
+  }
+  if (state.marquee) {
+    const rect = viewport.getBoundingClientRect();
+    updateMarquee(event.clientX - rect.left, event.clientY - rect.top);
+  }
 });
 
 viewport.addEventListener('pointerdown', event => {
@@ -1077,32 +1190,58 @@ viewport.addEventListener('pointerdown', event => {
     return;
   }
   state.canvasPasteArmed = true;
-  clearSelection();
   state.pasteTarget = null;
   clearTimeout(setPasteTarget.timer);
   $('#pasteTargetHint')?.classList.remove('visible');
   $$('.upload-zone').forEach(el => el.classList.remove('paste-focus'));
-  if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
-    document.activeElement.blur();
-  }
+  if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) document.activeElement.blur();
   if (state.noteLinkSourceId) beginNoteLink(state.noteLinkSourceId);
-  state.pan = {startX:event.clientX, startY:event.clientY, x:state.view.x, y:state.view.y, pointerId:event.pointerId};
-  viewport.classList.add('panning');
-  viewport.setPointerCapture?.(event.pointerId);
+
+  const activeTool = state.temporaryHand ? 'hand' : state.toolMode;
+  const rect = viewport.getBoundingClientRect();
+  if (event.button === 0 && activeTool === 'select' && event.shiftKey) {
+    event.preventDefault();
+    state.marquee = {
+      startX:event.clientX - rect.left,
+      startY:event.clientY - rect.top,
+      baseSelection:new Set(state.selectedNodeIds),
+      pointerId:event.pointerId,
+    };
+    $('#selectionMarquee').classList.add('visible');
+    viewport.classList.add('marquee-active');
+    viewport.setPointerCapture?.(event.pointerId);
+    updateMarquee(state.marquee.startX, state.marquee.startY);
+    return;
+  }
+  if (activeTool === 'hand' || event.button === 1) {
+    event.preventDefault();
+    state.pan = {startX:event.clientX, startY:event.clientY, x:state.view.x, y:state.view.y, pointerId:event.pointerId};
+    viewport.classList.add('panning');
+    viewport.setPointerCapture?.(event.pointerId);
+    return;
+  }
+  clearSelection();
 });
 
-const finishPan = event => {
-  if (!state.pan) return;
-  viewport.releasePointerCapture?.(event.pointerId);
-  state.pan = null;
-  viewport.classList.remove('panning');
-  scheduleViewportSave();
+const finishCanvasPointer = event => {
+  if (state.pan) {
+    viewport.releasePointerCapture?.(event.pointerId);
+    state.pan = null;
+    viewport.classList.remove('panning');
+    scheduleViewportSave();
+  }
+  if (state.marquee) {
+    viewport.releasePointerCapture?.(event.pointerId);
+    state.marquee = null;
+    $('#selectionMarquee').classList.remove('visible');
+    viewport.classList.remove('marquee-active');
+  }
 };
-viewport.addEventListener('pointerup', finishPan);
-viewport.addEventListener('pointercancel', finishPan);
+viewport.addEventListener('pointerup', finishCanvasPointer);
+viewport.addEventListener('pointercancel', finishCanvasPointer);
 
 function scheduleViewportSave() {
-  if (!state.project) return;
+  if (!state.project || !canEditProject()) return;
   mergeDirtyProject({viewport:{...state.view, edge_style:state.edgeStyle}});
 }
 
@@ -1188,6 +1327,7 @@ function nextNodePosition(type) {
 }
 
 async function addNode(type, position = null, showToast = true) {
+  if (!canEditProject() && state.project) return toast('Проект AI-агента доступен только для просмотра', 'error');
   if (!state.project) { openProjectModal(); return null; }
   setSaveStatus('saving');
   try {
@@ -1216,6 +1356,7 @@ async function addNode(type, position = null, showToast = true) {
 const OBJECT_CLIPBOARD_PREFIX = 'NEUROPHOTO_OBJECT_V1:';
 
 async function duplicateSelectedObjects() {
+  if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   const ids = selectedNodeIds();
   if (!ids.length || !state.project) return toast('Сначала выделите объект');
   if (hasUnsavedChanges()) await saveAllChanges({silent:true});
@@ -1262,6 +1403,7 @@ async function pasteCopiedObjects(text = '') {
 }
 
 async function deleteSelectedObjects() {
+  if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   const ids = selectedNodeIds();
   if (!ids.length || !state.project) return;
   if (!confirm(`Удалить выделенные объекты: ${ids.length}?`)) return;
@@ -1285,6 +1427,7 @@ async function deleteSelectedObjects() {
 }
 
 function moveSelectedObjects(dx, dy, record = true) {
+  if (!canEditProject()) return;
   const ids = selectedNodeIds();
   if (!ids.length || !state.project) return;
   if (record) snapshotForUndo();
@@ -1302,6 +1445,7 @@ function moveSelectedObjects(dx, dy, record = true) {
 }
 
 function alignProjectNodes() {
+  if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
   if (!state.project?.nodes?.length) return;
   snapshotForUndo();
   const photos = projectPhotoNodes();
@@ -1397,7 +1541,14 @@ function closeSearchResults() { $('#searchResults').classList.remove('open'); }
 
 function openProjectsDrawer() { $('#projectsDrawer').classList.add('open'); $('#drawerBackdrop').classList.add('open'); refreshProjectsQuietly(); }
 function closeProjectsDrawer() { $('#projectsDrawer').classList.remove('open'); $('#drawerBackdrop').classList.remove('open'); }
-function openProjectModal() { $('#projectModal').classList.add('open'); setTimeout(() => $('#projectForm input[name="title"]')?.focus(), 100); }
+function openProjectModal() {
+  const form = $('#projectForm');
+  const desired = state.currentUser?.role === 'owner' ? state.projectFilter : 'user';
+  const radio = form.querySelector(`input[name="project_type"][value="${desired}"]`);
+  if (radio) radio.checked = true;
+  $('#projectModal').classList.add('open');
+  setTimeout(() => $('#projectForm input[name="title"]')?.focus(), 100);
+}
 function closeProjectModal() { $('#projectModal').classList.remove('open'); }
 function openModal(id) { $(id).classList.add('open'); }
 function closeModal(id) { $(id).classList.remove('open'); }
@@ -1525,8 +1676,9 @@ $('#projectForm').addEventListener('submit', async event => {
   try {
     const project = await api('/api/projects', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:form.title.value, description:form.description.value, theme:form.theme.value, tags:form.tags.value.split(',').map(tag => tag.trim()).filter(Boolean)}),
+      body:JSON.stringify({title:form.title.value, description:form.description.value, theme:form.theme.value, project_type:form.project_type.value, tags:form.tags.value.split(',').map(tag => tag.trim()).filter(Boolean)}),
     });
+    state.projectFilter = project.project_type === 'agent' ? 'agent' : 'user';
     form.reset();
     closeProjectModal();
     state.projects = await api('/api/projects');
@@ -1538,11 +1690,13 @@ $('#projectForm').addEventListener('submit', async event => {
 
 $('#projectTitle').addEventListener('focus', snapshotForUndo);
 $('#projectTitle').addEventListener('input', event => {
+  if (!canEditProject()) return;
   if (!state.project) return;
   state.project.title = event.target.value;
   mergeDirtyProject({title:event.target.value.trim() || 'Без названия'});
 });
 $('#projectTitle').addEventListener('blur', event => {
+  if (!canEditProject()) return;
   if (!state.project) return;
   const title = event.target.value.trim() || 'Без названия';
   event.target.value = title;
@@ -1623,6 +1777,11 @@ $('#projectsButton').addEventListener('click', openProjectsDrawer);
 $('#closeProjects').addEventListener('click', closeProjectsDrawer);
 $('#drawerBackdrop').addEventListener('click', closeProjectsDrawer);
 $('#newProjectButton').addEventListener('click', openProjectModal);
+$$('[data-project-filter]').forEach(button => button.addEventListener('click', () => {
+  state.projectFilter = button.dataset.projectFilter === 'agent' ? 'agent' : 'user';
+  renderProjectList();
+}));
+$$('[data-tool]').forEach(button => button.addEventListener('click', () => setToolMode(button.dataset.tool)));
 $$('[data-close-modal]').forEach(button => button.addEventListener('click', closeProjectModal));
 $('#projectModal').addEventListener('click', event => { if (event.target === $('#projectModal')) closeProjectModal(); });
 
@@ -1702,6 +1861,7 @@ document.addEventListener('click', event => { if (!event.target.closest('.hotkey
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; storageSet('neurophoto_theme', theme); }
 applyTheme(storageGet('neurophoto_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 setWorkspaceToolbarCollapsed(storageGet('neurophoto_toolbar_collapsed') === '1');
+setToolMode('select');
 $('#themeButton').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 
 window.addEventListener('paste', event => {
@@ -1726,14 +1886,22 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     closeProjectsDrawer(); closeProjectModal(); closeModal('#helpModal'); closeModal('#connectionsModal'); closeModal('#diagnosticsModal'); closeModal('#usersModal'); closeSearchResults(); $('#profilePopover')?.classList.remove('open'); $('#hotkeysPopover')?.classList.remove('open');
     if (state.noteLinkSourceId) beginNoteLink(state.noteLinkSourceId);
+    clearSelection();
   }
   if (command && event.key === '0') { event.preventDefault(); fitContent(); return; }
   if (command && key === 'k') { event.preventDefault(); $('#workspaceSearch').focus(); return; }
   if (command && key === 's') { event.preventDefault(); saveAllChanges().catch(() => {}); return; }
+  if (!editing && event.code === 'Space' && !event.repeat) {
+    event.preventDefault();
+    setToolMode('hand', {temporary:true});
+    return;
+  }
   if (editing) return;
+  if (!command && key === 'v') { event.preventDefault(); setToolMode('select'); return; }
+  if (!command && key === 'h') { event.preventDefault(); setToolMode('hand'); return; }
   if (command && key === 'c') { event.preventDefault(); copySelectedObjects().catch(error => toast(error.message, 'error')); return; }
   if (command && key === 'd') { event.preventDefault(); duplicateSelectedObjects().catch(error => toast(error.message, 'error')); return; }
-  if (command && key === 'z') { event.preventDefault(); restoreUndoSnapshot(); return; }
+  if (command && key === 'z') { event.preventDefault(); if (canEditProject()) restoreUndoSnapshot(); return; }
   if (command && key === 'a') {
     event.preventDefault();
     state.selectedNodeIds = new Set((state.project?.nodes || []).map(node => node.id));
@@ -1742,15 +1910,30 @@ window.addEventListener('keydown', event => {
     return;
   }
   if (event.key === 'Delete' || event.key === 'Backspace') {
-    if (selectedNodeIds().length) { event.preventDefault(); deleteSelectedObjects().catch(error => toast(error.message, 'error')); }
+    if (selectedNodeIds().length && canEditProject()) { event.preventDefault(); deleteSelectedObjects().catch(error => toast(error.message, 'error')); }
     return;
   }
   const arrows = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
-  if (arrows[event.key] && selectedNodeIds().length) {
+  if (arrows[event.key]) {
     event.preventDefault();
-    const step = event.shiftKey ? 1 : 10;
     const [dx,dy] = arrows[event.key];
-    moveSelectedObjects(dx * step, dy * step, !event.repeat);
+    if (selectedNodeIds().length && canEditProject()) {
+      const step = event.shiftKey ? 1 : 10;
+      moveSelectedObjects(dx * step, dy * step, !event.repeat);
+    } else {
+      const step = event.shiftKey ? 10 : 42;
+      state.view.x -= dx * step;
+      state.view.y -= dy * step;
+      applyView();
+      scheduleViewportSave();
+    }
+  }
+});
+
+window.addEventListener('keyup', event => {
+  if (event.code === 'Space' && state.temporaryHand) {
+    state.temporaryHand = false;
+    setToolMode(state.toolMode);
   }
 });
 
