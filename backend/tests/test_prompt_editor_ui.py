@@ -10,8 +10,10 @@ def test_prompt_editor_assets_exist_and_are_injected():
     assert 'version="0.7.7"' in main
     assert 'prompt-editor.css?v=7.7' in main
     assert 'prompt-editor.js?v=7.7' in main
+    assert 'prompt-editor-guards.js?v=7.7' in main
     assert (STATIC / "prompt-editor.css").is_file()
     assert (STATIC / "prompt-editor.js").is_file()
+    assert (STATIC / "prompt-editor-guards.js").is_file()
 
 
 def test_prompt_editor_contract():
@@ -24,6 +26,13 @@ def test_prompt_editor_contract():
     assert "fetchProjectPreservingLocalChanges" in script
     assert "promptEditorReferenceFile" in script
     assert "loading=\"lazy\"" in script
+
+
+def test_prompt_editor_lock_guards():
+    guards = (STATIC / "prompt-editor-guards.js").read_text(encoding="utf-8")
+    assert "changedWhileOriginallyLocked" in guards
+    assert "promptEditorReferenceFile" in guards
+    assert "Сначала сохраните" in guards
 
 
 def test_prompt_card_and_panel_styles_are_large_and_responsive():
