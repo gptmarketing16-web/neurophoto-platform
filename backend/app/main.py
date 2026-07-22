@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.7.6",
+    version="0.7.7",
     lifespan=lifespan,
     docs_url=None if settings.app_env == "production" else "/docs",
     redoc_url=None if settings.app_env == "production" else "/redoc",
@@ -146,7 +146,16 @@ def login_page(request: Request):
 
 @app.get("/app", response_class=HTMLResponse)
 def studio() -> str:
-    return (STATIC_DIR / "app.html").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "app.html").read_text(encoding="utf-8")
+    html = html.replace(
+        "</head>",
+        '<link rel="stylesheet" href="/static/prompt-editor.css?v=7.7" /></head>',
+    )
+    html = html.replace(
+        "</body>",
+        '<script src="/static/prompt-editor.js?v=7.7"></script></body>',
+    )
+    return html
 
 
 def render_public_workspace(workspace: Workspace) -> str:
