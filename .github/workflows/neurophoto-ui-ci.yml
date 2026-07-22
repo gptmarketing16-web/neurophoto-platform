@@ -1,0 +1,37 @@
+name: NeuroPhoto UI CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: neurophoto-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip install -r requirements.txt
+      - name: Compile backend
+        working-directory: backend
+        run: python -m compileall app
+      - name: Check JavaScript
+        working-directory: backend
+        run: |
+          node --check app/static/canvas.js
+          node --check app/static/prompt-editor.js
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest -q
