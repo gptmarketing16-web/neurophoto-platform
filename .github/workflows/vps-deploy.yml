@@ -1,0 +1,183 @@
+name: NeuroPhoto VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Action to run
+        required: true
+        default: deploy_and_diagnose
+        type: choice
+        options:
+          - diagnose
+          - deploy_and_diagnose
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neurophoto-vps-production
+  cancel-in-progress: false
+
+jobs:
+  manage-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+      NEUROPHOTO_ENV: ${{ secrets.NEUROPHOTO_ENV }}
+      MODE: ${{ github.event_name == 'push' && 'deploy_and_diagnose' || inputs.mode }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in VPS_HOST VPS_USER VPS_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+          if [ "$MODE" = "deploy_and_diagnose" ] && [ -z "${NEUROPHOTO_ENV:-}" ]; then
+            echo "Missing GitHub Actions secret: NEUROPHOTO_ENV"
+            exit 1
+          fi
+
+      - name: Install SSH client helper
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Trust VPS host key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Prepare release files
+        if: env.MODE == 'deploy_and_diagnose'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude='__pycache__' \
+            -czf /tmp/neurophoto-src.tgz .
+          printf '%s\n' "$NEUROPHOTO_ENV" > /tmp/neurophoto.env
+          chmod 600 /tmp/neurophoto.env
+
+      - name: Upload release files
+        if: env.MODE == 'deploy_and_diagnose'
+        shell: bash
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e scp \
+            /tmp/neurophoto-src.tgz \
+            /tmp/neurophoto.env \
+            "$VPS_USER@$VPS_HOST:/tmp/"
+
+      - name: Deploy with health-check and rollback
+        if: env.MODE == 'deploy_and_diagnose'
+        shell: bash
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e ssh "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          RELEASE_DIR="$HOME/neurophoto-release"
+          ENV_DIR="$HOME/.config/neurophoto"
+          ENV_FILE="$ENV_DIR/.env"
+
+          mkdir -p "$RELEASE_DIR" "$ENV_DIR"
+          find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          tar -xzf /tmp/neurophoto-src.tgz -C "$RELEASE_DIR"
+          install -m 600 /tmp/neurophoto.env "$ENV_FILE"
+          sed -i 's/\r$//' "$ENV_FILE"
+
+          docker build -t neurophoto:candidate "$RELEASE_DIR"
+
+          if docker image inspect neurophoto:latest >/dev/null 2>&1; then
+            docker tag neurophoto:latest neurophoto:rollback
+          fi
+
+          docker rm -f neurophoto >/dev/null 2>&1 || true
+          docker run -d \
+            --name neurophoto \
+            --restart unless-stopped \
+            --env-file "$ENV_FILE" \
+            -p 127.0.0.1:10000:10000 \
+            neurophoto:candidate
+
+          healthy=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/neurophoto-health.json 2>/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$healthy" -ne 1 ]; then
+            echo "New container failed health-check"
+            docker logs --tail 100 neurophoto || true
+            docker rm -f neurophoto >/dev/null 2>&1 || true
+            if docker image inspect neurophoto:rollback >/dev/null 2>&1; then
+              docker run -d \
+                --name neurophoto \
+                --restart unless-stopped \
+                --env-file "$ENV_FILE" \
+                -p 127.0.0.1:10000:10000 \
+                neurophoto:rollback
+              echo "Rolled back to previous image"
+            fi
+            exit 1
+          fi
+
+          docker tag neurophoto:candidate neurophoto:latest
+          cat /tmp/neurophoto-health.json
+          echo
+          docker ps --filter name=neurophoto
+          REMOTE
+
+      - name: Upload safe diagnostics
+        shell: bash
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e scp ops/vps_diagnose.py "$VPS_USER@$VPS_HOST:/tmp/vps_diagnose.py"
+
+      - name: Diagnose reference storage
+        shell: bash
+        env:
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e ssh "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          echo "===== HEALTH ====="
+          curl -fsS http://127.0.0.1:10000/health
+          echo
+          echo "===== REFERENCE STORAGE ====="
+          docker cp /tmp/vps_diagnose.py neurophoto:/tmp/vps_diagnose.py
+          docker exec neurophoto python /tmp/vps_diagnose.py
+          echo "===== CONTAINER ====="
+          docker ps --filter name=neurophoto
+          REMOTE
