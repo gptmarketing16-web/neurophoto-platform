@@ -177,7 +177,7 @@ jobs:
           echo
           echo "===== REFERENCE STORAGE ====="
           docker cp /tmp/vps_diagnose.py neurophoto:/tmp/vps_diagnose.py
-          docker exec neurophoto python /tmp/vps_diagnose.py
+          docker exec -e PYTHONPATH=/app neurophoto python /tmp/vps_diagnose.py
           echo "===== CONTAINER ====="
           docker ps --filter name=neurophoto
           REMOTE
