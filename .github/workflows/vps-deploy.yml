@@ -31,6 +31,8 @@ jobs:
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
       NEUROPHOTO_ENV: ${{ secrets.NEUROPHOTO_ENV }}
+      SUPABASE_S3_ACCESS_KEY: ${{ secrets.SUPABASE_S3_ACCESS_KEY }}
+      SUPABASE_S3_SECRET_KEY: ${{ secrets.SUPABASE_S3_SECRET_KEY }}
       MODE: ${{ github.event_name == 'push' && 'deploy_and_diagnose' || inputs.mode }}
 
     steps:
@@ -47,9 +49,13 @@ jobs:
               exit 1
             fi
           done
-          if [ "$MODE" = "deploy_and_diagnose" ] && [ -z "${NEUROPHOTO_ENV:-}" ]; then
-            echo "Missing GitHub Actions secret: NEUROPHOTO_ENV"
-            exit 1
+          if [ "$MODE" = "deploy_and_diagnose" ]; then
+            for name in NEUROPHOTO_ENV SUPABASE_S3_ACCESS_KEY SUPABASE_S3_SECRET_KEY; do
+              if [ -z "${!name:-}" ]; then
+                echo "Missing GitHub Actions secret: $name"
+                exit 1
+              fi
+            done
           fi
 
       - name: Install SSH client helper
@@ -76,7 +82,14 @@ jobs:
             --exclude=.env \
             --exclude='__pycache__' \
             -czf /tmp/neurophoto-src.tgz .
-          printf '%s\n' "$NEUROPHOTO_ENV" > /tmp/neurophoto.env
+          printf '%s\n' "$NEUROPHOTO_ENV" \
+            | sed 's/\r$//' \
+            | grep -vE '^(S3_ACCESS_KEY|S3_SECRET_KEY)=' \
+            > /tmp/neurophoto.env
+          printf 'S3_ACCESS_KEY=%s\nS3_SECRET_KEY=%s\n' \
+            "$SUPABASE_S3_ACCESS_KEY" \
+            "$SUPABASE_S3_SECRET_KEY" \
+            >> /tmp/neurophoto.env
           chmod 600 /tmp/neurophoto.env
 
       - name: Upload release files
