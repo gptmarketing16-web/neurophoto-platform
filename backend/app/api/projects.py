@@ -561,6 +561,7 @@ def create_node(
             "aspect_ratio": "auto",
             "detected_aspect_ratio": "1:1",
             "quality": "high",
+            "output_format": "png",
             "prompt_locked": False,
             "reference_locked": False,
         }

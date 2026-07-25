@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.7.7",
+    version="0.7.9",
     lifespan=lifespan,
     docs_url=None if settings.app_env == "production" else "/docs",
     redoc_url=None if settings.app_env == "production" else "/redoc",
@@ -149,11 +149,11 @@ def studio() -> str:
     html = (STATIC_DIR / "app.html").read_text(encoding="utf-8")
     html = html.replace(
         "</head>",
-        '<link rel="stylesheet" href="/static/prompt-editor.css?v=7.7" /></head>',
+        '<link rel="stylesheet" href="/static/prompt-editor.css?v=7.8" /></head>',
     )
     html = html.replace(
         "</body>",
-        '<script src="/static/prompt-editor.js?v=7.7"></script><script src="/static/prompt-editor-guards.js?v=7.7"></script></body>',
+        '<script src="/static/prompt-editor.js?v=7.8"></script><script src="/static/prompt-editor-guards.js?v=7.8"></script></body>',
     )
     return html
 

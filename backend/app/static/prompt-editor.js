@@ -10,6 +10,103 @@
     configurePromptNode,
   };
 
+  const GEMINI_MODEL_CATALOG = {
+    'gemini-3.1-flash-image': {
+      label: 'Nano Banana 2',
+      sizes: ['0.5K', '1K', '2K', '4K'],
+      ratios: ['1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
+      note: 'Основная модель · быстро · 0.5K–4K',
+    },
+    'gemini-3.1-flash-lite-image': {
+      label: 'Nano Banana 2 Lite',
+      sizes: ['1K'],
+      ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
+      note: 'Минимальная задержка · только 1K',
+    },
+    'gemini-3-pro-image': {
+      label: 'Nano Banana Pro',
+      sizes: ['1K', '2K', '4K'],
+      ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
+      note: 'Максимальная точность · до 4K',
+    },
+    'gemini-2.5-flash-image': {
+      label: 'Nano Banana Legacy',
+      sizes: ['1K'],
+      ratios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
+      note: 'Предыдущая версия · только 1K',
+    },
+  };
+
+  const OPENAI_ASPECT_RATIOS = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
+
+  function providerDefaultModel(provider) {
+    return provider === 'gemini' ? 'gemini-3.1-flash-image' : 'gpt-image-2';
+  }
+
+  function modelMeta(provider, model) {
+    if (provider === 'gemini') return GEMINI_MODEL_CATALOG[model] || GEMINI_MODEL_CATALOG[providerDefaultModel(provider)];
+    return {label: model || 'GPT Image 2', sizes: ['low', 'medium', 'high'], ratios: OPENAI_ASPECT_RATIOS, note: 'OpenAI · PNG'};
+  }
+
+  function normalizedQuality(provider, model, quality) {
+    if (provider !== 'gemini') return ['low', 'medium', 'high'].includes(quality) ? quality : 'high';
+    const meta = modelMeta(provider, model);
+    const legacyMap = {high: '2K', medium: '1K', low: '1K'};
+    const requested = legacyMap[quality] || String(quality || '').toUpperCase();
+    return meta.sizes.includes(requested) ? requested : meta.sizes[0];
+  }
+
+  function setSelectOptions(select, options, selected) {
+    select.innerHTML = options.map(option => {
+      const item = typeof option === 'string' ? {value: option, label: option} : option;
+      return `<option value="${item.value}">${item.label}</option>`;
+    }).join('');
+    select.value = selected;
+    if (select.value !== selected && select.options.length) select.value = select.options[0].value;
+    return select.value;
+  }
+
+  function syncGenerationControls({providerSelect, modelSelect, aspectSelect, qualitySelect, config}) {
+    const provider = config.provider === 'gemini' ? 'gemini' : 'openai';
+    config.provider = provider;
+    providerSelect.value = provider;
+
+    const modelOptions = provider === 'gemini'
+      ? Object.entries(GEMINI_MODEL_CATALOG).map(([value, meta]) => ({value, label: meta.label}))
+      : [{value: config.model && !config.model.startsWith('gemini-') ? config.model : 'gpt-image-2', label: 'GPT Image 2'}];
+    const desiredModel = provider === 'gemini' && GEMINI_MODEL_CATALOG[config.model]
+      ? config.model
+      : provider === 'openai' && config.model && !config.model.startsWith('gemini-')
+        ? config.model
+        : providerDefaultModel(provider);
+    config.model = setSelectOptions(modelSelect, modelOptions, desiredModel);
+
+    const meta = modelMeta(provider, config.model);
+    config.quality = normalizedQuality(provider, config.model, config.quality);
+    const qualityOptions = provider === 'gemini'
+      ? meta.sizes.map(value => ({value, label: value}))
+      : [
+          {value: 'high', label: 'High'},
+          {value: 'medium', label: 'Medium'},
+          {value: 'low', label: 'Low'},
+        ];
+    config.quality = setSelectOptions(qualitySelect, qualityOptions, config.quality);
+
+    const aspectOptions = [
+      {value: 'auto', label: 'Авто · по референсу'},
+      ...meta.ratios.map(value => ({value, label: value})),
+    ];
+    if (config.aspect_ratio !== 'auto' && !meta.ratios.includes(config.aspect_ratio)) config.aspect_ratio = 'auto';
+    config.aspect_ratio = setSelectOptions(aspectSelect, aspectOptions, config.aspect_ratio || 'auto');
+    return meta;
+  }
+
+  function modelSummary(config) {
+    const meta = modelMeta(config.provider, config.model);
+    const file = config.provider === 'gemini' ? 'JPEG' : 'PNG';
+    return `${meta.label} · ${config.quality} · ${file} · ${meta.note}`;
+  }
+
   Object.assign(state, {
     promptEditorNodeId: null,
     promptEditorDraft: null,
@@ -39,10 +136,11 @@
           </div>
           <div class="connections-summary"><span class="links-icon">↗</span><strong class="connection-count">0 фото</strong><span>подключено автоматически</span></div>
           <div class="generation-settings provider-settings prompt-card-settings">
-            <label><span>Модель</span><select class="provider-select"><option value="openai">ChatGPT</option><option value="gemini">Gemini</option></select></label>
-            <label><span>Формат</span><select class="aspect-ratio"><option value="auto">Авто</option><option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:2">3:2</option><option value="3:4">3:4</option><option value="4:3">4:3</option><option value="4:5">4:5</option><option value="5:4">5:4</option><option value="9:16">9:16</option><option value="16:9">16:9</option></select><small class="detected-ratio"></small></label>
+            <label><span>Провайдер</span><select class="provider-select"><option value="openai">ChatGPT</option><option value="gemini">Google AI</option></select></label>
+            <label><span>Версия</span><select class="model-select"></select></label>
+            <label><span>Формат</span><select class="aspect-ratio"></select><small class="detected-ratio"></small></label>
             <label><span>Результатов</span><input class="output-count" type="number" min="1" max="20" value="1" /></label>
-            <label><span>Качество</span><select class="image-quality"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
+            <label><span>Качество</span><select class="image-quality"></select></label>
           </div>
           <div class="provider-node-status"></div>
           <button class="generate-btn" type="button"><span class="spark">✦</span><span class="generate-label">Генерировать</span><span class="generate-count"></span></button>
@@ -81,10 +179,11 @@
         <section class="prompt-editor-section">
           <strong class="prompt-editor-section-title">Параметры</strong>
           <div class="prompt-editor-settings">
-            <label><span>Модель</span><select id="promptEditorProvider"><option value="openai">ChatGPT · GPT Image 2</option><option value="gemini">Gemini</option></select></label>
-            <label><span>Формат</span><select id="promptEditorAspect"><option value="auto">Авто · по референсу</option><option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:2">3:2</option><option value="3:4">3:4</option><option value="4:3">4:3</option><option value="4:5">4:5</option><option value="5:4">5:4</option><option value="9:16">9:16</option><option value="16:9">16:9</option></select></label>
+            <label><span>Провайдер</span><select id="promptEditorProvider"><option value="openai">ChatGPT</option><option value="gemini">Google AI</option></select></label>
+            <label><span>Версия модели</span><select id="promptEditorModel"></select></label>
+            <label><span>Формат кадра</span><select id="promptEditorAspect"></select></label>
             <label><span>Результатов</span><input id="promptEditorCount" type="number" min="1" max="20" /></label>
-            <label><span>Качество</span><select id="promptEditorQuality"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
+            <label><span>Качество</span><select id="promptEditorQuality"></select></label>
           </div>
           <div class="prompt-editor-model-name" id="promptEditorModelName"></div>
         </section>
@@ -108,6 +207,7 @@
     chooseReference: document.querySelector('#promptEditorChooseReference'),
     pasteReference: document.querySelector('#promptEditorPasteReference'),
     provider: document.querySelector('#promptEditorProvider'),
+    model: document.querySelector('#promptEditorModel'),
     aspect: document.querySelector('#promptEditorAspect'),
     count: document.querySelector('#promptEditorCount'),
     quality: document.querySelector('#promptEditorQuality'),
@@ -133,12 +233,15 @@
 
   function normalizedPromptConfig(config = {}) {
     const normalized = deepCopy(config);
-    normalized.provider ||= 'openai';
-    normalized.model ||= defaultModel(normalized.provider);
+    normalized.provider = normalized.provider === 'gemini' ? 'gemini' : 'openai';
+    normalized.model ||= providerDefaultModel(normalized.provider);
+    if (normalized.provider === 'gemini' && !GEMINI_MODEL_CATALOG[normalized.model]) normalized.model = providerDefaultModel('gemini');
+    if (normalized.provider === 'openai' && normalized.model.startsWith('gemini-')) normalized.model = providerDefaultModel('openai');
     normalized.aspect_ratio ||= 'auto';
     normalized.detected_aspect_ratio ||= '1:1';
     normalized.output_count = Math.max(1, Math.min(20, Number(normalized.output_count) || 1));
-    normalized.quality ||= 'high';
+    normalized.quality = normalizedQuality(normalized.provider, normalized.model, normalized.quality);
+    normalized.output_format = normalized.provider === 'gemini' ? 'jpeg' : 'png';
     normalized.prompt_text ||= '';
     normalized.prompt_locked = Boolean(normalized.prompt_locked);
     normalized.reference_locked = Boolean(normalized.reference_locked);
@@ -157,12 +260,12 @@
     const draft = state.promptEditorDraft;
     draft.title = panelEls.title.value.trim() || 'Без названия';
     draft.config.prompt_text = panelEls.text.value;
-    const nextProvider = panelEls.provider.value;
-    if (draft.config.provider !== nextProvider) draft.config.model = defaultModel(nextProvider);
-    draft.config.provider = nextProvider;
+    draft.config.provider = panelEls.provider.value === 'gemini' ? 'gemini' : 'openai';
+    draft.config.model = panelEls.model.value || providerDefaultModel(draft.config.provider);
     draft.config.aspect_ratio = panelEls.aspect.value;
     draft.config.output_count = Math.max(1, Math.min(20, Number(panelEls.count.value) || 1));
-    draft.config.quality = panelEls.quality.value;
+    draft.config.quality = normalizedQuality(draft.config.provider, draft.config.model, panelEls.quality.value);
+    draft.config.output_format = draft.config.provider === 'gemini' ? 'jpeg' : 'png';
     return draft;
   }
 
@@ -203,15 +306,20 @@
     panelEls.title.value = node.title;
     panelEls.text.value = config.prompt_text;
     panelEls.provider.value = config.provider;
-    panelEls.aspect.value = config.aspect_ratio;
+    syncGenerationControls({
+      providerSelect: panelEls.provider,
+      modelSelect: panelEls.model,
+      aspectSelect: panelEls.aspect,
+      qualitySelect: panelEls.quality,
+      config,
+    });
     panelEls.count.value = config.output_count;
-    panelEls.quality.value = config.quality;
     panelEls.referenceNumber.textContent = `Референс №${config.reference_number ?? '—'}`;
     panelEls.photoCount.textContent = pluralPhotos(uploadedPhotoCount());
-    panelEls.modelName.textContent = `Используется модель: ${config.model || defaultModel(config.provider)}`;
+    panelEls.modelName.textContent = modelSummary(config);
     panelEls.message.textContent = state.projectReadOnly ? 'Проект доступен только для просмотра.' : '';
     panelEls.title.readOnly = state.projectReadOnly;
-    [panelEls.provider, panelEls.aspect, panelEls.count, panelEls.quality].forEach(control => { control.disabled = state.projectReadOnly; });
+    [panelEls.provider, panelEls.model, panelEls.aspect, panelEls.count, panelEls.quality].forEach(control => { control.disabled = state.projectReadOnly; });
     panelEls.generate.disabled = state.projectReadOnly;
     renderEditorLockState();
     updateEditorReferencePreview();
@@ -343,11 +451,30 @@
   function markEditorInput() {
     if (!state.promptEditorDraft || state.projectReadOnly) return;
     readEditorDraft();
-    panelEls.modelName.textContent = `Используется модель: ${state.promptEditorDraft.config.model || defaultModel(panelEls.provider.value)}`;
+    panelEls.modelName.textContent = modelSummary(state.promptEditorDraft.config);
     setEditorDirty(true);
   }
 
-  [panelEls.title, panelEls.text, panelEls.provider, panelEls.aspect, panelEls.count, panelEls.quality].forEach(control => {
+  panelEls.provider.addEventListener('change', () => {
+    if (!state.promptEditorDraft || state.projectReadOnly) return;
+    const config = state.promptEditorDraft.config;
+    config.provider = panelEls.provider.value === 'gemini' ? 'gemini' : 'openai';
+    config.model = providerDefaultModel(config.provider);
+    config.quality = config.provider === 'gemini' ? '2K' : 'high';
+    syncGenerationControls({providerSelect: panelEls.provider, modelSelect: panelEls.model, aspectSelect: panelEls.aspect, qualitySelect: panelEls.quality, config});
+    markEditorInput();
+  });
+
+  panelEls.model.addEventListener('change', () => {
+    if (!state.promptEditorDraft || state.projectReadOnly) return;
+    const config = state.promptEditorDraft.config;
+    config.model = panelEls.model.value;
+    config.quality = normalizedQuality(config.provider, config.model, config.quality);
+    syncGenerationControls({providerSelect: panelEls.provider, modelSelect: panelEls.model, aspectSelect: panelEls.aspect, qualitySelect: panelEls.quality, config});
+    markEditorInput();
+  });
+
+  [panelEls.title, panelEls.text, panelEls.aspect, panelEls.count, panelEls.quality].forEach(control => {
     control.addEventListener(control.tagName === 'SELECT' ? 'change' : 'input', markEditorInput);
   });
 
@@ -424,25 +551,34 @@
     $('.connections-summary', article).title = `${readyPhotoCount} из ${totalPhotoCount} фото-блоков содержат загруженные изображения`;
 
     const providerSelect = $('.provider-select', article);
+    const modelSelect = $('.model-select', article);
     const aspectSelect = $('.aspect-ratio', article);
     const countInput = $('.output-count', article);
     const qualitySelect = $('.image-quality', article);
     providerSelect.value = config.provider;
-    aspectSelect.value = config.aspect_ratio;
+    syncGenerationControls({providerSelect, modelSelect, aspectSelect, qualitySelect, config});
     countInput.value = config.output_count;
-    qualitySelect.value = config.quality;
     $('.detected-ratio', article).textContent = config.aspect_ratio === 'auto' ? `Референс: ${config.detected_aspect_ratio}` : '';
-    [providerSelect, aspectSelect, countInput, qualitySelect].forEach(control => {
+    [providerSelect, modelSelect, aspectSelect, countInput, qualitySelect].forEach(control => {
       control.disabled = state.projectReadOnly;
       control.addEventListener('pointerdown', event => event.stopPropagation());
     });
 
     providerSelect.addEventListener('change', () => {
       snapshotForUndo();
-      config.provider = providerSelect.value;
-      config.model = defaultModel(config.provider);
+      config.provider = providerSelect.value === 'gemini' ? 'gemini' : 'openai';
+      config.model = providerDefaultModel(config.provider);
+      config.quality = config.provider === 'gemini' ? '2K' : 'high';
+      syncGenerationControls({providerSelect, modelSelect, aspectSelect, qualitySelect, config});
       scheduleNodeConfigSave(node);
       renderNodeProviderStatus(article, config.provider);
+    });
+    modelSelect.addEventListener('change', () => {
+      snapshotForUndo();
+      config.model = modelSelect.value;
+      config.quality = normalizedQuality(config.provider, config.model, config.quality);
+      syncGenerationControls({providerSelect, modelSelect, aspectSelect, qualitySelect, config});
+      scheduleNodeConfigSave(node);
     });
     aspectSelect.addEventListener('change', () => {
       snapshotForUndo();
@@ -459,7 +595,7 @@
     });
     qualitySelect.addEventListener('change', () => {
       snapshotForUndo();
-      config.quality = qualitySelect.value;
+      config.quality = normalizedQuality(config.provider, config.model, qualitySelect.value);
       scheduleNodeConfigSave(node);
     });
 

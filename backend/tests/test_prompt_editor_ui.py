@@ -7,10 +7,10 @@ STATIC = ROOT / "app" / "static"
 
 def test_prompt_editor_assets_exist_and_are_injected():
     main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
-    assert 'version="0.7.7"' in main
-    assert 'prompt-editor.css?v=7.7' in main
-    assert 'prompt-editor.js?v=7.7' in main
-    assert 'prompt-editor-guards.js?v=7.7' in main
+    assert 'version="0.7.9"' in main
+    assert 'prompt-editor.css?v=7.8' in main
+    assert 'prompt-editor.js?v=7.8' in main
+    assert 'prompt-editor-guards.js?v=7.8' in main
     assert (STATIC / "prompt-editor.css").is_file()
     assert (STATIC / "prompt-editor.js").is_file()
     assert (STATIC / "prompt-editor-guards.js").is_file()
@@ -42,3 +42,16 @@ def test_prompt_card_and_panel_styles_are_large_and_responsive():
     assert ".prompt-editor-panel" in css
     assert "--prompt-editor-w: 470px" in css
     assert "@media (max-width: 720px)" in css
+
+
+def test_prompt_editor_has_nano_banana_model_controls():
+    script = (STATIC / "prompt-editor.js").read_text(encoding="utf-8")
+    assert "Nano Banana 2" in script
+    assert "Nano Banana 2 Lite" in script
+    assert "Nano Banana Pro" in script
+    assert "gemini-3.1-flash-image" in script
+    assert "gemini-3.1-flash-lite-image" in script
+    assert "gemini-3-pro-image" in script
+    assert "promptEditorModel" in script
+    assert "JPEG" in script
+    assert "4K" in script

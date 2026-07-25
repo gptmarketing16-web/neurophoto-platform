@@ -26,15 +26,65 @@ class GenerationOutput:
 
 ASPECT_VALUES = {
     "1:1": 1.0,
+    "1:4": 1 / 4,
+    "1:8": 1 / 8,
     "2:3": 2 / 3,
     "3:2": 3 / 2,
     "3:4": 3 / 4,
+    "4:1": 4.0,
     "4:3": 4 / 3,
     "4:5": 4 / 5,
     "5:4": 5 / 4,
+    "8:1": 8.0,
     "9:16": 9 / 16,
     "16:9": 16 / 9,
+    "21:9": 21 / 9,
 }
+
+GEMINI_COMMON_ASPECT_RATIOS = (
+    "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+)
+
+GEMINI_MODEL_CAPABILITIES: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "gemini-3.1-flash-image": {
+        "label": "Nano Banana 2",
+        "image_sizes": ("0.5K", "1K", "2K", "4K"),
+        "aspect_ratios": (
+            "1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1",
+            "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9",
+        ),
+    },
+    "gemini-3.1-flash-lite-image": {
+        "label": "Nano Banana 2 Lite",
+        "image_sizes": ("1K",),
+        "aspect_ratios": GEMINI_COMMON_ASPECT_RATIOS,
+    },
+    "gemini-3-pro-image": {
+        "label": "Nano Banana Pro",
+        "image_sizes": ("1K", "2K", "4K"),
+        "aspect_ratios": GEMINI_COMMON_ASPECT_RATIOS,
+    },
+    "gemini-2.5-flash-image": {
+        "label": "Nano Banana Legacy",
+        "image_sizes": ("1K",),
+        "aspect_ratios": GEMINI_COMMON_ASPECT_RATIOS,
+    },
+}
+
+
+def normalize_gemini_image_size(model: str, quality: str) -> str:
+    capabilities = GEMINI_MODEL_CAPABILITIES.get(model) or GEMINI_MODEL_CAPABILITIES["gemini-3.1-flash-image"]
+    supported = tuple(capabilities["image_sizes"])
+    requested = str(quality or "").upper()
+    legacy_quality_map = {"HIGH": "2K", "MEDIUM": "1K", "LOW": "1K"}
+    requested = legacy_quality_map.get(requested, requested)
+    return requested if requested in supported else ("1K" if "1K" in supported else supported[0])
+
+
+def normalize_gemini_aspect_ratio(model: str, aspect_ratio: str) -> str:
+    capabilities = GEMINI_MODEL_CAPABILITIES.get(model) or GEMINI_MODEL_CAPABILITIES["gemini-3.1-flash-image"]
+    supported = tuple(capabilities["aspect_ratios"])
+    return aspect_ratio if aspect_ratio in supported else "1:1"
 
 
 def closest_aspect_ratio(width: int, height: int) -> str:
@@ -213,11 +263,12 @@ class GeminiImageProvider(ImageProvider):
             from google import genai
         except ImportError as exc:
             raise ImageProviderError("The google-genai Python SDK is not installed") from exc
+        self.api_key = api_key
         self.client = genai.Client(api_key=api_key)
         self.semaphore = asyncio.Semaphore(settings.gemini_max_concurrency)
 
-    def _one_sync(self, prompt: str, image_paths: list[Path], model: str,
-                  aspect_ratio: str, quality: str) -> tuple[bytes, dict[str, int]]:
+    @staticmethod
+    def _input_blocks(prompt: str, image_paths: list[Path]) -> list[dict[str, Any]]:
         input_blocks: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
             suffix = path.suffix.lower()
@@ -227,30 +278,118 @@ class GeminiImageProvider(ImageProvider):
                 "data": base64.b64encode(path.read_bytes()).decode("ascii"),
                 "mime_type": mime_type,
             })
+        return input_blocks
+
+    @staticmethod
+    def _usage_dict(usage_obj: Any) -> dict[str, int]:
+        input_tokens = int(
+            getattr(usage_obj, "prompt_token_count", 0)
+            or getattr(usage_obj, "input_tokens", 0)
+            or 0
+        )
+        output_tokens = int(
+            getattr(usage_obj, "candidates_token_count", 0)
+            or getattr(usage_obj, "output_tokens", 0)
+            or 0
+        )
+        total_tokens = int(
+            getattr(usage_obj, "total_token_count", 0)
+            or getattr(usage_obj, "total_tokens", 0)
+            or input_tokens + output_tokens
+        )
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _one_interaction_sync(
+        self,
+        prompt: str,
+        image_paths: list[Path],
+        model: str,
+        aspect_ratio: str,
+        quality: str,
+    ) -> tuple[bytes, dict[str, int]]:
+        image_size = normalize_gemini_image_size(model, quality)
+        response_format: dict[str, Any] = {
+            "type": "image",
+            # Python Interactions currently accepts JPEG reliably; PNG produced HTTP 400.
+            "mime_type": "image/jpeg",
+            "aspect_ratio": normalize_gemini_aspect_ratio(model, aspect_ratio),
+        }
+        if model != "gemini-2.5-flash-image":
+            response_format["image_size"] = image_size
+
         interaction = self.client.interactions.create(
             model=model,
-            input=input_blocks,
-            response_format={
-                "type": "image",
-                "mime_type": "image/png",
-                "aspect_ratio": aspect_ratio,
-                "image_size": "2K" if quality == "high" else "1K",
-            },
+            input=self._input_blocks(prompt, image_paths),
+            response_format=response_format,
             store=False,
         )
         output_image = getattr(interaction, "output_image", None)
         data = getattr(output_image, "data", None)
         if not data:
             raise ImageProviderError("Gemini не вернул изображение")
+        image_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
         usage_obj = getattr(interaction, "usage_metadata", None) or getattr(interaction, "usage", None)
-        input_tokens = int(getattr(usage_obj, "prompt_token_count", 0) or getattr(usage_obj, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(usage_obj, "candidates_token_count", 0) or getattr(usage_obj, "output_tokens", 0) or 0)
-        total_tokens = int(getattr(usage_obj, "total_token_count", 0) or getattr(usage_obj, "total_tokens", 0) or input_tokens + output_tokens)
-        return base64.b64decode(data), {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
+        return image_bytes, self._usage_dict(usage_obj)
+
+    def _one_legacy_sync(
+        self,
+        prompt: str,
+        image_paths: list[Path],
+        model: str,
+        aspect_ratio: str,
+    ) -> tuple[bytes, dict[str, int]]:
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        for path in image_paths:
+            suffix = path.suffix.lower()
+            mime_type = "image/png" if suffix == ".png" else "image/webp" if suffix == ".webp" else "image/jpeg"
+            parts.append({
+                "inlineData": {
+                    "mimeType": mime_type,
+                    "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                }
+            })
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"],
+                "responseFormat": {
+                    "image": {"aspectRatio": normalize_gemini_aspect_ratio(model, aspect_ratio)}
+                },
+            },
         }
+        base_url = settings.gemini_api_base_url.rstrip("/")
+        response = httpx.post(
+            f"{base_url}/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=600,
+        )
+        if response.status_code >= 400:
+            raise ImageProviderError(f"Gemini вернул {response.status_code}: {response.text[:800]}")
+        body = response.json()
+        for candidate in body.get("candidates") or []:
+            for part in ((candidate.get("content") or {}).get("parts") or []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    usage = body.get("usageMetadata") or {}
+                    input_tokens = int(usage.get("promptTokenCount", 0) or 0)
+                    output_tokens = int(usage.get("candidatesTokenCount", 0) or 0)
+                    return base64.b64decode(inline["data"]), {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": int(usage.get("totalTokenCount", 0) or input_tokens + output_tokens),
+                    }
+        raise ImageProviderError("Gemini Nano Banana Legacy не вернул изображение")
+
+    def _one_sync(self, prompt: str, image_paths: list[Path], model: str,
+                  aspect_ratio: str, quality: str) -> tuple[bytes, dict[str, int]]:
+        if model == "gemini-2.5-flash-image":
+            return self._one_legacy_sync(prompt, image_paths, model, aspect_ratio)
+        return self._one_interaction_sync(prompt, image_paths, model, aspect_ratio, quality)
 
     async def _one(self, *, prompt: str, image_paths: list[Path], model: str,
                    aspect_ratio: str, quality: str) -> tuple[bytes, dict[str, int]]:
@@ -260,6 +399,10 @@ class GeminiImageProvider(ImageProvider):
     async def generate_from_references(self, *, prompt: str, image_paths: list[Path], output_count: int,
                                        output_dir: Path, model: str, aspect_ratio: str,
                                        quality: str) -> GenerationOutput:
+        if not image_paths or output_count < 1:
+            raise ImageProviderError("Нужны входные изображения и положительное количество результатов")
+        if model not in GEMINI_MODEL_CAPABILITIES:
+            raise ImageProviderError(f"Неподдерживаемая модель Gemini: {model}")
         results = await asyncio.gather(*[
             self._one(prompt=prompt, image_paths=image_paths, model=model,
                       aspect_ratio=aspect_ratio, quality=quality)
@@ -269,9 +412,9 @@ class GeminiImageProvider(ImageProvider):
         paths: list[Path] = []
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         for index, (image_bytes, item_usage) in enumerate(results, start=1):
-            target = output_dir / f"output_{index:03d}.png"
+            target = output_dir / f"output_{index:03d}.jpg"
             target.write_bytes(image_bytes)
-            crop_to_aspect(target, aspect_ratio)
+            crop_to_aspect(target, normalize_gemini_aspect_ratio(model, aspect_ratio))
             paths.append(target)
             for key in usage:
                 usage[key] += int(item_usage.get(key, 0) or 0)
