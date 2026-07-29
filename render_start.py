@@ -1,8 +1,8 @@
-"""Run the web API and the RQ worker in one Render web service.
+"""Run the NeuroPhoto web API and, optionally, an embedded RQ worker.
 
-Render's free plan does not provide a free background-worker service, so this
-small supervisor keeps both processes in one container. Browser polling during
-a generation keeps the free web service awake until the job completes.
+The embedded worker remains enabled by default for compatibility with the current
+single-service Render deployment. Set RUN_EMBEDDED_WORKER=false on the Web Service
+when a separate Render Background Worker runs ``python -m app.worker``.
 """
 from __future__ import annotations
 
@@ -14,6 +14,20 @@ import time
 
 processes: list[subprocess.Popen] = []
 stopping = False
+
+
+def env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
 
 
 def stop_all(signum: int | None = None, _frame=None) -> None:
@@ -40,7 +54,17 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop_all)
 
     port = os.environ.get("PORT", "10000")
-    worker = subprocess.Popen([sys.executable, "-m", "app.worker"])
+    run_embedded_worker = env_flag("RUN_EMBEDDED_WORKER", True)
+    web_concurrency = positive_int_env("WEB_CONCURRENCY", 1)
+
+    worker: subprocess.Popen | None = None
+    if run_embedded_worker:
+        worker = subprocess.Popen([sys.executable, "-m", "app.worker"])
+        processes.append(worker)
+        print("Embedded generation worker enabled", flush=True)
+    else:
+        print("Embedded generation worker disabled; expecting a separate worker service", flush=True)
+
     web = subprocess.Popen(
         [
             sys.executable,
@@ -51,20 +75,23 @@ def main() -> int:
             "0.0.0.0",
             "--port",
             port,
+            "--workers",
+            str(web_concurrency),
             "--proxy-headers",
             "--forwarded-allow-ips=*",
         ]
     )
-    processes.extend([worker, web])
+    processes.append(web)
 
     try:
         while True:
-            worker_code = worker.poll()
+            if worker is not None:
+                worker_code = worker.poll()
+                if worker_code is not None:
+                    print(f"Generation worker stopped with code {worker_code}", flush=True)
+                    stop_all()
+                    return worker_code or 1
             web_code = web.poll()
-            if worker_code is not None:
-                print(f"Generation worker stopped with code {worker_code}", flush=True)
-                stop_all()
-                return worker_code or 1
             if web_code is not None:
                 print(f"Web service stopped with code {web_code}", flush=True)
                 stop_all()
