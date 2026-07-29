@@ -19,6 +19,7 @@ from .api.interaction import router as interaction_router
 from .api.max_webhook import router as max_router
 from .api.performance import router as performance_router
 from .api.projects import router as projects_router
+from .api.render_speed import router as render_speed_router
 from .api.users import router as users_router
 from .auth import decode_session_token, ensure_owner
 from .db import Base, SessionLocal, engine, get_db
@@ -83,6 +84,7 @@ app.include_router(automation_router)
 app.include_router(projects_router)
 app.include_router(performance_router)
 app.include_router(interaction_router)
+app.include_router(render_speed_router)
 app.include_router(admin_router)
 app.include_router(users_router)
 app.include_router(max_router)
@@ -157,7 +159,7 @@ def studio() -> str:
     )
     html = html.replace(
         "</body>",
-        '<script src="/static/prompt-editor.js?v=7.8"></script><script src="/static/prompt-editor-guards.js?v=7.8"></script><script src="/static/performance-hotfix.js?v=7.11"></script><script src="/static/performance-actions.js?v=7.12"></script><script src="/static/interaction-policy.js?v=7.13"></script></body>',
+        '<script src="/static/prompt-editor.js?v=7.8"></script><script src="/static/prompt-editor-guards.js?v=7.8"></script><script src="/static/performance-hotfix.js?v=7.11"></script><script src="/static/performance-actions.js?v=7.12"></script><script src="/static/interaction-policy.js?v=7.13"></script><script src="/static/render-stability.js?v=7.14"></script></body>',
     )
     return html
 

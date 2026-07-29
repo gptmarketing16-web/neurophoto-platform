@@ -36,6 +36,7 @@ jobs:
           node --check app/static/performance-hotfix.js
           node --check app/static/performance-actions.js
           node --check app/static/interaction-policy.js
+          node --check app/static/render-stability.js
       - name: Run tests
         working-directory: backend
         run: python -m pytest -q
