@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import mimetypes
@@ -15,6 +16,7 @@ from ..settings import settings
 logger = logging.getLogger(__name__)
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 
 
 class LocalStorage:
@@ -41,7 +43,7 @@ class LocalStorage:
         limit = settings.max_upload_mb * 1024 * 1024
 
         with path.open("wb") as target:
-            while chunk := await upload.read(1024 * 1024):
+            while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
                 total += len(chunk)
                 if total > limit:
                     target.close()
@@ -117,7 +119,7 @@ class S3Storage(LocalStorage):
                 signature_version="s3v4",
                 connect_timeout=5,
                 read_timeout=20,
-                max_pool_connections=4,
+                max_pool_connections=16,
                 retries={"max_attempts": 2, "mode": "standard"},
                 s3={"addressing_style": "path"},
             ),
@@ -145,7 +147,8 @@ class S3Storage(LocalStorage):
     async def save_upload(self, storage_key: str, upload: UploadFile) -> tuple[str, int]:
         digest, total = await super().save_upload(storage_key, upload)
         content_type = upload.content_type or self._content_type(storage_key)
-        self.client.upload_file(
+        await asyncio.to_thread(
+            self.client.upload_file,
             str(super().absolute(storage_key)),
             self.bucket,
             storage_key,
