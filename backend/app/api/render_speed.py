@@ -161,17 +161,19 @@ def get_canvas_asset_direct(
     user: CurrentUser,
     db: Session = Depends(get_db),
 ) -> Response:
-    asset = db.get(ProjectAsset, asset_id)
-    if not asset:
+    row = db.execute(
+        select(ProjectAsset, Project.project_type)
+        .join(Project, Project.id == ProjectAsset.project_id)
+        .where(ProjectAsset.id == asset_id)
+    ).one_or_none()
+    if not row:
         raise HTTPException(404, "Изображение не найдено")
-    project = db.get(Project, asset.project_id)
-    if not project:
-        raise HTTPException(404, "Проект не найден")
+    asset, project_type = row
     assert_project_access(
         user,
         asset.project_id,
         write=False,
-        project_type=project.project_type,
+        project_type=project_type,
     )
 
     signed_url = signed_asset_url(asset.storage_key)
