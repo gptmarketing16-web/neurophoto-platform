@@ -33,6 +33,9 @@ jobs:
           node --check app/static/canvas.js
           node --check app/static/prompt-editor.js
           node --check app/static/prompt-editor-guards.js
+          node --check app/static/performance-hotfix.js
+          node --check app/static/performance-actions.js
+          node --check app/static/interaction-policy.js
       - name: Run tests
         working-directory: backend
         run: python -m pytest -q
