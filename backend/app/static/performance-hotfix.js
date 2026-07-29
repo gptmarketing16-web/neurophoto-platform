@@ -6,6 +6,9 @@
     ['4:5', 4 / 5], ['1:1', 1], ['5:4', 5 / 4], ['4:3', 4 / 3],
     ['3:2', 3 / 2], ['16:9', 16 / 9], ['21:9', 21 / 9], ['4:1', 4], ['8:1', 8],
   ];
+  const MAX_UPLOAD_DIMENSION = 3072;
+  const MAX_UPLOAD_BYTES_WITHOUT_OPTIMIZATION = 5 * 1024 * 1024;
+  const JPEG_QUALITY = 0.92;
 
   function closestAspectRatio(width, height) {
     if (!width || !height) return '1:1';
@@ -22,31 +25,110 @@
     return best[0];
   }
 
-  async function readImageDimensions(file) {
+  function localFormatBytes(bytes) {
+    if (!bytes) return '0 Б';
+    const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+  }
+
+  async function decodeImage(file) {
     if (!file) return null;
     if (typeof createImageBitmap === 'function') {
       try {
         const bitmap = await createImageBitmap(file);
-        const result = {width: bitmap.width, height: bitmap.height};
-        bitmap.close?.();
-        return result;
+        return {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          close: () => bitmap.close?.(),
+        };
       } catch (_) {}
     }
 
     return new Promise(resolve => {
       const url = URL.createObjectURL(file);
       const image = new Image();
-      image.onload = () => {
-        const result = {width: image.naturalWidth, height: image.naturalHeight};
-        URL.revokeObjectURL(url);
-        resolve(result);
-      };
+      image.onload = () => resolve({
+        source: image,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        close: () => URL.revokeObjectURL(url),
+      });
       image.onerror = () => {
         URL.revokeObjectURL(url);
         resolve(null);
       };
       image.src = url;
     });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+  }
+
+  function optimizedFilename(filename) {
+    const base = String(filename || `upload-${Date.now()}`).replace(/\.[^.]+$/, '') || `upload-${Date.now()}`;
+    return `${base}.jpg`;
+  }
+
+  async function prepareImageForUpload(file) {
+    const fallback = {
+      file,
+      dimensions: null,
+      optimized: false,
+      originalBytes: Number(file?.size || 0),
+      uploadBytes: Number(file?.size || 0),
+    };
+    const decoded = await decodeImage(file);
+    if (!decoded) return fallback;
+
+    const sourceWidth = Number(decoded.width || 0);
+    const sourceHeight = Number(decoded.height || 0);
+    const longestSide = Math.max(sourceWidth, sourceHeight);
+    const mustResize = longestSide > MAX_UPLOAD_DIMENSION;
+    const mustCompress = Number(file.size || 0) > MAX_UPLOAD_BYTES_WITHOUT_OPTIMIZATION;
+
+    if (!mustResize && !mustCompress) {
+      decoded.close();
+      return {...fallback, dimensions: {width: sourceWidth, height: sourceHeight}};
+    }
+
+    try {
+      const scale = mustResize ? MAX_UPLOAD_DIMENSION / longestSide : 1;
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', {alpha: false});
+      if (!context) return {...fallback, dimensions: {width: sourceWidth, height: sourceHeight}};
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, width, height);
+      context.drawImage(decoded.source, 0, 0, width, height);
+      const blob = await canvasToBlob(canvas, 'image/jpeg', JPEG_QUALITY);
+      if (!blob) return {...fallback, dimensions: {width: sourceWidth, height: sourceHeight}};
+      if (!mustResize && blob.size >= file.size) {
+        return {...fallback, dimensions: {width: sourceWidth, height: sourceHeight}};
+      }
+      const optimizedFile = new File([blob], optimizedFilename(file.name), {
+        type: 'image/jpeg',
+        lastModified: file.lastModified || Date.now(),
+      });
+      return {
+        file: optimizedFile,
+        dimensions: {width, height},
+        optimized: true,
+        originalBytes: Number(file.size || 0),
+        uploadBytes: Number(optimizedFile.size || 0),
+      };
+    } catch (_) {
+      return {...fallback, dimensions: {width: sourceWidth, height: sourceHeight}};
+    } finally {
+      decoded.close();
+    }
   }
 
   function syncCurrentProjectSummary() {
@@ -108,10 +190,17 @@
     if (!canEditProject()) return toast('Проект AI-агента доступен только для просмотра', 'error');
     if (!file?.type?.startsWith('image/')) return toast('Выберите изображение', 'error');
 
+    setSaveStatus('saving', 'Подготовка фото…');
+    const prepared = await prepareImageForUpload(file);
+    const uploadFile = prepared.file;
     const form = new FormData();
-    form.append('file', file, file.name || `clipboard-${Date.now()}.png`);
-    const dimensionsPromise = endpointKind === 'reference' ? readImageDimensions(file) : Promise.resolve(null);
-    setSaveStatus('saving', 'Загрузка…');
+    form.append('file', uploadFile, uploadFile.name || `clipboard-${Date.now()}.jpg`);
+    setSaveStatus(
+      'saving',
+      prepared.optimized
+        ? `Загрузка ${localFormatBytes(prepared.uploadBytes)}…`
+        : 'Загрузка…',
+    );
 
     try {
       if (hasUnsavedChanges()) await saveAllChanges({silent: true});
@@ -123,12 +212,14 @@
       node.assets = (node.assets || []).filter(item => item.kind !== assetKind || item.generation_id);
       node.assets.push(asset);
 
-      const dimensions = await dimensionsPromise;
-      if (endpointKind === 'reference' && dimensions) {
+      if (endpointKind === 'reference' && prepared.dimensions) {
         node.config = {...(node.config || {})};
-        node.config.reference_width = dimensions.width;
-        node.config.reference_height = dimensions.height;
-        node.config.detected_aspect_ratio = closestAspectRatio(dimensions.width, dimensions.height);
+        node.config.reference_width = prepared.dimensions.width;
+        node.config.reference_height = prepared.dimensions.height;
+        node.config.detected_aspect_ratio = closestAspectRatio(
+          prepared.dimensions.width,
+          prepared.dimensions.height,
+        );
       }
 
       const now = new Date().toISOString();
@@ -137,7 +228,11 @@
       syncCurrentProjectSummary();
       renderCanvas();
       setSaveStatus();
-      toast(endpointKind === 'photo' ? 'Фото заказчика загружено' : 'Референс загружен', 'success');
+      const label = endpointKind === 'photo' ? 'Фото заказчика загружено' : 'Референс загружен';
+      const optimization = prepared.optimized
+        ? ` (${localFormatBytes(prepared.originalBytes)} → ${localFormatBytes(prepared.uploadBytes)})`
+        : '';
+      toast(`${label}${optimization}`, 'success');
       return asset;
     } catch (error) {
       setSaveStatus('error');
