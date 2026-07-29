@@ -5,6 +5,26 @@
   const MAX_UPLOAD_DIMENSION = 3072;
   const MAX_UPLOAD_BYTES_WITHOUT_OPTIMIZATION = 5 * 1024 * 1024;
   const JPEG_QUALITY = 0.92;
+  const ASPECT_RATIOS = [
+    ['1:8', 1 / 8], ['1:4', 1 / 4], ['2:3', 2 / 3], ['3:4', 3 / 4],
+    ['4:5', 4 / 5], ['1:1', 1], ['5:4', 5 / 4], ['4:3', 4 / 3],
+    ['3:2', 3 / 2], ['16:9', 16 / 9], ['21:9', 21 / 9], ['4:1', 4], ['8:1', 8],
+  ];
+
+  function closestAspectRatio(width, height) {
+    if (!width || !height) return '1:1';
+    const actual = width / height;
+    let best = ASPECT_RATIOS[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of ASPECT_RATIOS) {
+      const distance = Math.abs(Math.log(actual / candidate[1]));
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best[0];
+  }
 
   function localViewKey(projectId) {
     return `${VIEW_STORAGE_PREFIX}${projectId}`;
@@ -239,6 +259,10 @@
         node.config = {...(node.config || {})};
         node.config.reference_width = prepared.dimensions.width;
         node.config.reference_height = prepared.dimensions.height;
+        node.config.detected_aspect_ratio = closestAspectRatio(
+          prepared.dimensions.width,
+          prepared.dimensions.height,
+        );
       }
       const now = new Date().toISOString();
       node.updated_at = now;
