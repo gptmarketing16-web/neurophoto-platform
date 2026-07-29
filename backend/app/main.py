@@ -153,7 +153,7 @@ def studio() -> str:
     )
     html = html.replace(
         "</body>",
-        '<script src="/static/prompt-editor.js?v=7.8"></script><script src="/static/prompt-editor-guards.js?v=7.8"></script></body>',
+        '<script src="/static/prompt-editor.js?v=7.8"></script><script src="/static/prompt-editor-guards.js?v=7.8"></script><script src="/static/performance-hotfix.js?v=7.10"></script></body>',
     )
     return html
 
